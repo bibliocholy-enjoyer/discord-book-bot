@@ -1,0 +1,28 @@
+[project]
+name = "discord-book-bot"
+version = "0.1.0"
+description = "Discord bot that replies to {book title by author} with book info from Hardcover"
+requires-python = ">=3.12"
+dependencies = [
+    "discord.py>=2.5,<3",
+    "aiohttp>=3.9",
+    "python-dotenv>=1.0",
+    "vadersentiment>=3.3.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

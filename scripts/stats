@@ -1,0 +1,17 @@
+#!/bin/sh
+# Print the usage stats from the bot on Fly, one screen at a time.
+#
+#     scripts/stats [--server NAME_OR_ID]... [--exclude NAME_OR_ID]... [--all-servers]
+#                   [--include-owner | --only-owner]
+#
+# This is `fly ssh console -C "python -m bookbot.stats ..."` piped into a pager, with the
+# quoting of server names taken care of. The options are described at the top of
+# bookbot/stats.py. Set PAGER to use something other than less.
+
+command="python -m bookbot.stats"
+for arg in "$@"; do
+    # Wrap each option in single quotes so a name with spaces stays in one piece.
+    command="$command '$(printf '%s' "$arg" | sed "s/'/'\\\\''/g")'"
+done
+
+fly ssh console -C "$command" | ${PAGER:-less}

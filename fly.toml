@@ -1,0 +1,21 @@
+# The bot only makes outbound connections (to Discord and Hardcover), so there are no
+# services or ports: just one small machine that must always be running.
+app = "discord-book-bot"
+primary_region = "iad"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+[[restart]]
+  policy = "always"
+
+# The usage log (see docs/HOW_IT_WORKS.md) lives on a volume so it survives deploys.
+# Create it once with: fly volumes create bookbot_data --size 1 --region iad
+[mounts]
+  source = "bookbot_data"
+  destination = "/data"
+
+[env]
+  USAGE_DB = "/data/usage.db"
+  SUPPORT_URL = "https://discord.gg/6qjApAQ556"
