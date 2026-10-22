@@ -7,7 +7,7 @@ and links to the book on Hardcover, Goodreads, and Amazon.
 
 You can also use the `/book` command to summon book info directly, even in your private DMs.
 
-<img width="379" height="233" alt="Screenshot 2026-10-22 at 6 53 14 AM" src="https://github.com/user-attachments/assets/8f9d70c8-93b6-4d6c-b0e6-894aad1dee88" />
+<img width="382" height="223" alt="Screenshot 2026-10-22 at 7 29 11 AM" src="https://github.com/user-attachments/assets/76c9718d-c715-4394-87ec-5fc0155b7ca2" />
 
 Try it out on [the BookBot HQ Discord server](https://discord.gg/6qjApAQ556), or [install it](https://discord.com/oauth2/authorize?client_id=1556911391733063774) on your own server or account.
 
