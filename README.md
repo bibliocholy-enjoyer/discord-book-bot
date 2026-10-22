@@ -1,8 +1,17 @@
 # discord-book-bot
 
-A Discord bot that replies to `{book title}` or `{book title by author}` with a compact
-card about the book from [Hardcover](https://hardcover.app): cover, author, series, genres,
-and links to the book on Hardcover, Goodreads and Amazon.
+A Discord bot that replies to messages containing `{book title}` or `{book title by author}` with info about the book from [Hardcover](https://hardcover.app), including the cover, author, series, genres,
+and links to the book on Hardcover, Goodreads, and Amazon.
+
+<img width="768" height="401" alt="Screenshot 2026-10-22 at 6 53 00 AM" src="https://github.com/user-attachments/assets/b3229fc1-54ab-4a1c-b0f8-7ddbf42f369b" />
+
+You can also use the `/book` command to summon book info directly, even in your private DMs.
+
+<img width="379" height="233" alt="Screenshot 2026-10-22 at 6 53 14 AM" src="https://github.com/user-attachments/assets/8f9d70c8-93b6-4d6c-b0e6-894aad1dee88" />
+
+Try it out on [the BookBot HQ Discord server](https://discord.gg/6qjApAQ556), or [install it](https://discord.com/oauth2/authorize?client_id=1556911391733063774) on your own server or account.
+
+## Features
 
 - Several `{…}` in one message get one combined reply (up to 5 books).
 - `/book` does the same lookup as a slash command. Add the bot to your own account and
