@@ -30,6 +30,7 @@ from .links import (
     goodreads_search_url,
     hardcover_book_id,
     hardcover_book_url,
+    hardcover_search_url,
 )
 from .lookup import LookupResult, find_book
 from .parsing import MAX_QUERIES_PER_MESSAGE, extract_queries
@@ -71,6 +72,9 @@ OLD_THREADS_TRIED = 10
 RETRIES_LISTED = 15  # how many updated replies /retry-missed names in its answer
 COVER_RETRY_DELAYS = (1.5, 3, 6)  # seconds to wait before each re-send of a coverless edit
 OWNER_DM_INTERVAL = 3600  # at most one DM per kind of error per hour
+# At most one DM a day about the same missing book, or the same book missing its cover or
+# blurb, however many people ask for it in the meantime.
+GAP_DM_INTERVAL = 24 * 3600
 HEARTBEAT_MINUTES = 5
 
 
@@ -396,6 +400,36 @@ def _with_cover_and_blurb(book: Book, filled: dict[int, Book]) -> Book:
     return replace(book, cover_url=now.cover_url, description=now.description)
 
 
+def missing_text(query: str, where: str, retryable: bool) -> str:
+    """The owner's DM about a query that found nothing on Hardcover."""
+    shown = discord.utils.escape_markdown(query)
+    return (
+        f"\N{LEFT-POINTING MAGNIFYING GLASS} Couldn't find **{shown}** on Hardcover"
+        f" (asked for in {where}). If it isn't there, add it: "
+        f"<{hardcover_search_url(query)}>"
+        + ("\nThen `/retry-missed` puts it in the replies that asked for it." if retryable else "")
+    )
+
+
+def gap_text(book: Book, where: str, retryable: bool) -> str:
+    """The owner's DM about a book whose Hardcover page lacks its cover or blurb."""
+    lacks = " and ".join(
+        part
+        for part, missing in (
+            ("cover", not book.cover_url),
+            ("blurb", not (book.description or "").strip()),
+        )
+        if missing
+    )
+    by = f" by {discord.utils.escape_markdown(book.author_names[0])}" if book.author_names else ""
+    return (
+        f"\N{CLOSED BOOK} **{discord.utils.escape_markdown(book.title)}**{by} has no {lacks}"
+        f" on Hardcover, so its card linked to Goodreads or Amazon instead (asked for in"
+        f" {where}). Fill it in: <{hardcover_book_url(book.id)}>"
+        + ("\nThen `/retry-missed` updates the replies that showed it." if retryable else "")
+    )
+
+
 def _count(number: int, one: str, many: str) -> str:
     return f"{number} {one if number == 1 else many}"
 
@@ -552,6 +586,7 @@ class BookBot(discord.Client):
         self._session: aiohttp.ClientSession
         self._owner_id: int | None = config.owner_id
         self._last_owner_dm: dict[str, float] = {}
+        self._last_gap_dm: dict[str, float] = {}
         self.error_reaction: discord.Emoji | str = ERROR_REACTION
         self.replies: dict[int, Reply] = {}  # by the ID of the bot's reply message
         self.answered: dict[int, Answered] = {}  # by the ID of the message replied to
@@ -693,13 +728,15 @@ class BookBot(discord.Client):
         requester_id: int,
         origin: Origin | None = None,
         content: str | None = None,
+        where: str | None = None,
     ) -> tuple[dict, Reply | None]:
         """Look up every query; return the reply's keyword arguments and what to remember.
 
         With an `origin`, the lookups are also written to the usage log. `content` is the
-        message they came from, used only to score its sentiment and never stored.
+        message they came from, used only to score its sentiment and never stored. `where`
+        is as in _look_up.
         """
-        cards = await self._look_up(queries, origin, content)
+        cards = await self._look_up(queries, origin, content, where=where)
         return await self._compose(cards, requester_id)
 
     async def _look_up(
@@ -709,6 +746,7 @@ class BookBot(discord.Client):
         content: str | None = None,
         known: dict[str, Card] | None = None,
         logged: dict[str, int] | None = None,
+        where: str | None = None,
     ) -> list[Card]:
         """A card for every query, in order, without its embed yet.
 
@@ -717,6 +755,10 @@ class BookBot(discord.Client):
         "Wrong book?"; only the other queries are looked up and written to the usage log.
         `logged` holds the usage records of queries that are in the log already but have
         no card, as after a restart: those are looked up again but not logged twice.
+
+        With `where` (what the owner is told the lookup was for), the owner is also told
+        about each new query that found nothing, or found a book Hardcover has no cover
+        or blurb for, since those are fixed by adding to Hardcover.
         """
         known, logged = known or {}, logged or {}
         cards: list[Card] = []
@@ -731,6 +773,10 @@ class BookBot(discord.Client):
                     new.append(card)
             cards.append(card)
         await self.record_usage(origin, new, content)
+        if where is not None:
+            # /retry-missed can only update a reply it has a usage record for.
+            retryable = bool(self.usage and origin and origin.source == "message")
+            self.spawn(self.report_gaps(new, where, retryable))
         return cards
 
     async def _compose(
@@ -966,6 +1012,31 @@ class BookBot(discord.Client):
             pass
         await self.report_error(where, error)
 
+    async def report_gaps(self, cards: list[Card], where: str, retryable: bool) -> None:
+        """DM the owner about the cards that call for adding to Hardcover.
+
+        That is a query that found nothing, and a book whose Hardcover page lacks its cover
+        or blurb, which is why its card's title links to Goodreads or Amazon instead.
+        """
+        if self._owner_id is None:
+            return
+        now = time.monotonic()
+        self._last_gap_dm = {
+            key: last for key, last in self._last_gap_dm.items() if now - last < GAP_DM_INTERVAL
+        }
+        for card in cards:
+            key = f"book:{card.book.id}" if card.book else f"query:{card.query.casefold()}"
+            if key in self._last_gap_dm:
+                continue
+            if card.book and card.book.is_incomplete:
+                text = gap_text(card.book, where, retryable)
+            elif card.book is None:
+                text = missing_text(card.query, where, retryable)
+            else:
+                continue
+            self._last_gap_dm[key] = now
+            await self.tell_owner(text)
+
     async def _answer(
         self,
         message: discord.Message,
@@ -982,7 +1053,7 @@ class BookBot(discord.Client):
         `replace_only`, a reply that has been deleted stays deleted, and this returns False.
         """
         cards = await self._look_up(
-            queries, message_origin(message), message.content, known, logged
+            queries, message_origin(message), message.content, known, logged, message.jump_url
         )
         kwargs, reply = await self._compose(cards, message.author.id, embeds)
         if sent is not None:
@@ -1122,8 +1193,9 @@ class BookBot(discord.Client):
         # with "thinking…" first, which the card then replaces. Discord treats that as an
         # edit, tends to drop the cover from it, and the re-send that brings the cover
         # back (see ensure_covers) leaves the reply marked "(edited)".
+        where = f"/book in <#{interaction.channel_id}>" if interaction.guild else "/book in a DM"
         lookup = asyncio.create_task(
-            self._respond([query], interaction.user.id, command_origin(interaction))
+            self._respond([query], interaction.user.id, command_origin(interaction), where=where)
         )
         done, _ = await asyncio.wait({lookup}, timeout=DIRECT_ANSWER_WITHIN)
         if done:
