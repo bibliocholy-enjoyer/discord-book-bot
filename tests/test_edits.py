@@ -24,9 +24,11 @@ REQUESTER, BOT = 42, 99
 DUNE = Book(id=1, title="Dune", authors=[Author(id=1, name="Frank Herbert")])
 DUNE_MESSIAH = Book(id=2, title="Dune Messiah", authors=[Author(id=1, name="Frank Herbert")])
 CIRCE = Book(id=3, title="Circe")
+PIRANESI = Book(id=4, title="Piranesi", description="A house of halls.", cover_url="https://c")
 RESULTS = {
     "dune": LookupResult(book=DUNE, alternatives=[DUNE, DUNE_MESSIAH]),
     "circe": LookupResult(book=CIRCE, alternatives=[CIRCE]),
+    "piranesi": LookupResult(book=PIRANESI, alternatives=[PIRANESI]),
     "nothing": LookupResult(book=None),
 }
 NOT_FOUND = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "gone")
@@ -528,6 +530,7 @@ def command(calls):
     return SimpleNamespace(
         user=SimpleNamespace(id=REQUESTER),
         guild=None,
+        channel_id=30,
         response=Recorder(calls),
         followup=SimpleNamespace(send=send),
         original_response=original_response,
@@ -553,3 +556,74 @@ async def test_a_slow_book_command_says_it_is_thinking_first(bot, monkeypatch):
     await bot.handle_command(command(calls), "dune")
     assert [name for name, _ in calls] == ["defer", "send"]
     assert len(calls[1][1]["embeds"]) == 1 and calls[1][1]["wait"] is True
+
+
+# --- Telling the owner what Hardcover lacks -----------------------------------------------
+
+
+@pytest.fixture
+def owner_dms(bot):
+    dms = []
+
+    async def tell_owner(text):
+        dms.append(text)
+
+    bot._owner_id, bot.tell_owner = 1, tell_owner
+    return dms
+
+
+async def reported(bot):
+    """Let the background DMs to the owner finish."""
+    await asyncio.gather(
+        *(t for t in bot._background_tasks if t.get_coro().__name__ == "report_gaps")
+    )
+
+
+async def test_the_owner_hears_about_missing_books_and_missing_covers(bot, owner_dms):
+    message = FakeMessage("{nothing}, {circe} and {piranesi}")
+    await bot.on_message(message)
+    await reported(bot)
+    missing, gap = owner_dms
+    assert "Couldn't find **nothing**" in missing and message.jump_url in missing
+    assert "hardcover.app/search?q=nothing" in missing
+    assert "**Circe** has no cover and blurb" in gap and message.jump_url in gap
+    assert hardcover_book_url(CIRCE.id) in gap
+    assert "/retry-missed" in missing and "/retry-missed" in gap
+
+
+async def test_the_owner_hears_about_each_gap_once_a_day(bot, owner_dms, monkeypatch):
+    await bot.on_message(FakeMessage("{nothing} and {dune}"))
+    await bot.on_message(FakeMessage("{Nothing} and {dune}", id=501))
+    await reported(bot)
+    assert len(owner_dms) == 2
+
+    real = botmod.time.monotonic
+    monkeypatch.setattr(botmod.time, "monotonic", lambda: real() + botmod.GAP_DM_INTERVAL)
+    await bot.on_message(FakeMessage("{dune}", id=502))
+    await reported(bot)
+    assert len(owner_dms) == 3
+
+
+async def test_an_edit_only_reports_the_queries_it_adds(bot, owner_dms):
+    message = FakeMessage("{nothing}")
+    await bot.on_message(message)
+    await edit(bot, message, "{nothing} and {circe}")
+    await reported(bot)
+    assert ["Circe" in dm for dm in owner_dms] == [False, True]
+
+
+async def test_a_book_command_in_a_dm_is_reported_too(bot, owner_dms):
+    await bot.handle_command(command([]), "nothing")
+    await reported(bot)
+    [dm] = owner_dms
+    assert "Couldn't find **nothing**" in dm and "/book in a DM" in dm
+    assert "/retry-missed" not in dm  # it only updates replies to {…} messages in servers
+
+
+async def test_a_braces_message_in_a_dm_is_reported_too(bot, owner_dms):
+    message = FakeMessage("{circe}")
+    message.guild = None
+    await bot.on_message(message)
+    await reported(bot)
+    [dm] = owner_dms
+    assert "**Circe**" in dm and message.jump_url in dm

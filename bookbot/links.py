@@ -29,6 +29,10 @@ def hardcover_book_id(text: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def hardcover_search_url(query: str) -> str:
+    return f"https://hardcover.app/search?q={quote_plus(query[:150])}"
+
+
 def goodreads_search_url(query: str) -> str:
     return f"https://www.goodreads.com/search?q={quote_plus(query[:150])}"
 

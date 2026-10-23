@@ -168,6 +168,10 @@ uv run ruff check . && uv run ruff format --check .
 - The bot DMs its owner (the application owner, or `OWNER_ID`) with the error and a link to
   the message, at most once an hour per distinct error. You must share a server with the bot
   to receive DMs.
+- The bot also DMs its owner when a lookup finds nothing, or finds a book whose Hardcover
+  page has no cover or blurb (so its card's title links to Goodreads or Amazon instead),
+  with a link for adding or filling in the book on Hardcover. This covers `{…}` messages
+  and `/book`, in servers and in DMs, and each book or query is mentioned at most once a day.
 - If `HEARTBEAT_URL` is set, the bot requests it every 5 minutes while connected to
   Discord. Point it at a check on a service like [healthchecks.io](https://healthchecks.io)
   (period 5 minutes, grace 10) to get an email when the bot is down.
