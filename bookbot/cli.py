@@ -13,7 +13,8 @@ from .lookup import find_book
 
 
 async def run(queries: list[str]) -> None:
-    async with aiohttp.ClientSession() as session:
+    # trust_env picks up HTTPS_PROXY, for running behind a proxy such as a cloud sandbox
+    async with aiohttp.ClientSession(trust_env=True) as session:
         client = HardcoverClient(session, os.environ["HARDCOVER_TOKEN"])
         for query in queries:
             result = await find_book(client, query)
