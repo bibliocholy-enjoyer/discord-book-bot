@@ -199,7 +199,9 @@ over, links to the replies it updated, and lists what is still missing.
 - Only the bot's owner can use it, and it is not offered in servers at all, only in a DM
   with the bot.
 - It needs the usage log, which is where the missed queries are kept.
-- It covers `{…}` messages, not `/book` replies.
+- It covers `{…}` messages in servers that have added the bot. For `/book` there, it fills
+  in covers, but a `/book` that found nothing keeps saying so: the bot would need to know
+  who asked to give the card its buttons, and it doesn't keep that.
 - A book added to Hardcover moments ago may not be in its search yet; run it again later.
 
 ## Looking at the stats

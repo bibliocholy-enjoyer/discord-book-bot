@@ -530,10 +530,41 @@ def command(calls):
     return SimpleNamespace(
         user=SimpleNamespace(id=REQUESTER),
         guild=None,
+        channel=None,
         channel_id=30,
         response=Recorder(calls),
         followup=SimpleNamespace(send=send),
         original_response=original_response,
+    )
+
+
+def server_command(place):
+    """/book in a server that has added the bot. The replies go into `place.replies`,
+    `place` being a FakeMessage standing in for the channel."""
+
+    async def send_message(**kwargs):
+        reply = FakeReply(None, kwargs)
+        reply.reference, reply.interaction_metadata = None, SimpleNamespace()
+        place.replies.append(reply)
+
+    async def original_response():
+        return place.replies[-1]
+
+    return SimpleNamespace(
+        user=SimpleNamespace(id=REQUESTER),
+        guild=place.guild,
+        channel=place.channel,
+        channel_id=place.channel.id,
+        is_guild_integration=lambda: True,
+        response=SimpleNamespace(send_message=send_message),
+        original_response=original_response,
+    )
+
+
+async def settled(bot):
+    """Let the bot finish logging which message answered a /book."""
+    await asyncio.gather(
+        *(t for t in bot._background_tasks if t.get_coro().__name__ == "record_reply")
     )
 
 
@@ -584,7 +615,8 @@ async def test_the_owner_hears_about_missing_books_and_missing_covers(bot, owner
     await bot.on_message(message)
     await reported(bot)
     missing, gap = owner_dms
-    assert "Couldn't find **nothing**" in missing and message.jump_url in missing
+    assert "Couldn't find **nothing**" in missing
+    assert f"asked for in #general in **RfM**: {message.jump_url}" in missing
     assert "hardcover.app/search?q=nothing" in missing
     assert "**Circe** has no cover and blurb" in gap and message.jump_url in gap
     assert hardcover_book_url(CIRCE.id) in gap
@@ -617,7 +649,20 @@ async def test_a_book_command_in_a_dm_is_reported_too(bot, owner_dms):
     await reported(bot)
     [dm] = owner_dms
     assert "Couldn't find **nothing**" in dm and "/book in a DM" in dm
-    assert "/retry-missed" not in dm  # it only updates replies to {…} messages in servers
+    assert "`/retry-missed` can't update this reply" in dm  # nothing is logged from DMs
+
+
+async def test_a_book_command_in_a_server_names_the_channel(bot, owner_dms):
+    place = FakeMessage("")
+    await bot.handle_command(server_command(place), "nothing")
+    await bot.handle_command(server_command(place), "circe")
+    await reported(bot)
+    missing, gap = owner_dms
+    # By name: a channel mention shows as "#unknown" to an owner not in the server.
+    assert "/book in #general in **RfM**" in missing and "<#" not in missing
+    # A found book can't be put into a /book reply, but a cover can be.
+    assert "`/retry-missed` can't update this reply" in missing
+    assert "Then `/retry-missed` updates the replies that showed it." in gap
 
 
 async def test_a_braces_message_in_a_dm_is_reported_too(bot, owner_dms):

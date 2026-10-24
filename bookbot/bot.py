@@ -63,6 +63,8 @@ REMEMBERED_MESSAGES = 500
 # How far past a message to look for the bot's reply to it. The reply normally follows
 # within seconds, so it is among the first few messages after.
 REPLY_SEARCH_LIMIT = 30
+# How far before its usage record an old /book reply is looked for (see _fetch_command_reply).
+OLD_REPLY_LEEWAY = datetime.timedelta(minutes=1)
 # Discord also reports an "edit" when a link preview loads or a message is pinned. For a
 # message the bot doesn't remember, the edit only counts if the text changed this recently.
 RECENT_EDIT = datetime.timedelta(minutes=5)
@@ -382,6 +384,18 @@ def command_origin(interaction: discord.Interaction) -> Origin | None:
     )
 
 
+def place_text(guild: discord.Guild | None, channel) -> str:
+    """Where something was asked for, by name, for the owner: "#books in **Server**".
+
+    Not as a channel mention, which shows as "#unknown" to someone not in that server.
+    """
+    if guild is None:
+        return "a DM"
+    name = getattr(channel, "name", None)
+    shown = f"#{discord.utils.escape_markdown(name)}" if name else "a channel"
+    return f"{shown} in **{discord.utils.escape_markdown(guild.name)}**"
+
+
 def _just_edited(message: discord.Message) -> bool:
     """Whether the message's text changed moments ago, going by Discord's own record."""
     edited_at = message.edited_at
@@ -407,7 +421,12 @@ def missing_text(query: str, where: str, retryable: bool) -> str:
         f"\N{LEFT-POINTING MAGNIFYING GLASS} Couldn't find **{shown}** on Hardcover"
         f" (asked for in {where}). If it isn't there, add it: "
         f"<{hardcover_search_url(query)}>"
-        + ("\nThen `/retry-missed` puts it in the replies that asked for it." if retryable else "")
+        + (
+            "\nThen `/retry-missed` puts it in the replies that asked for it."
+            if retryable
+            else "\n`/retry-missed` can't update this reply: it only covers {…} messages in"
+            " servers that have added the bot."
+        )
     )
 
 
@@ -426,7 +445,12 @@ def gap_text(book: Book, where: str, retryable: bool) -> str:
         f"\N{CLOSED BOOK} **{discord.utils.escape_markdown(book.title)}**{by} has no {lacks}"
         f" on Hardcover, so its card linked to Goodreads or Amazon instead (asked for in"
         f" {where}). Fill it in: <{hardcover_book_url(book.id)}>"
-        + ("\nThen `/retry-missed` updates the replies that showed it." if retryable else "")
+        + (
+            "\nThen `/retry-missed` updates the replies that showed it."
+            if retryable
+            else "\n`/retry-missed` can't update this reply: it only covers servers that have"
+            " added the bot."
+        )
     )
 
 
@@ -774,9 +798,12 @@ class BookBot(discord.Client):
             cards.append(card)
         await self.record_usage(origin, new, content)
         if where is not None:
-            # /retry-missed can only update a reply it has a usage record for.
-            retryable = bool(self.usage and origin and origin.source == "message")
-            self.spawn(self.report_gaps(new, where, retryable))
+            # /retry-missed can only update a reply it has a usage record for. It can't
+            # put a found book into a /book reply, which would need the asker's ID for its
+            # buttons, but it can fill in a card's cover.
+            covers = bool(self.usage and origin)
+            books = covers and origin.source == "message"
+            self.spawn(self.report_gaps(new, where, books, covers))
         return cards
 
     async def _compose(
@@ -832,6 +859,13 @@ class BookBot(discord.Client):
                 card.mention_id = mention_id
         except Exception as error:
             await self.report_error("recording usage", error)
+
+    async def record_reply(self, mention_ids: list[int], reply_id: int) -> None:
+        """Note which message answered these /book lookups. Never raises, as above."""
+        try:
+            await self.usage.replied(mention_ids, reply_id)
+        except Exception as error:
+            await self.report_error("recording a /book reply", error)
 
     async def forget_usage(self, mention_ids: list[int]) -> None:
         """Remove the records of queries that were edited out of a message."""
@@ -1012,11 +1046,14 @@ class BookBot(discord.Client):
             pass
         await self.report_error(where, error)
 
-    async def report_gaps(self, cards: list[Card], where: str, retryable: bool) -> None:
+    async def report_gaps(
+        self, cards: list[Card], where: str, books_retryable: bool, covers_retryable: bool
+    ) -> None:
         """DM the owner about the cards that call for adding to Hardcover.
 
         That is a query that found nothing, and a book whose Hardcover page lacks its cover
-        or blurb, which is why its card's title links to Goodreads or Amazon instead.
+        or blurb, which is why its card's title links to Goodreads or Amazon instead. The
+        two `retryable`s say whether /retry-missed can put each kind right in the reply.
         """
         if self._owner_id is None:
             return
@@ -1029,9 +1066,9 @@ class BookBot(discord.Client):
             if key in self._last_gap_dm:
                 continue
             if card.book and card.book.is_incomplete:
-                text = gap_text(card.book, where, retryable)
+                text = gap_text(card.book, where, covers_retryable)
             elif card.book is None:
-                text = missing_text(card.query, where, retryable)
+                text = missing_text(card.query, where, books_retryable)
             else:
                 continue
             self._last_gap_dm[key] = now
@@ -1052,8 +1089,9 @@ class BookBot(discord.Client):
         `known` and `logged` are as in _look_up, and `embeds` as in _compose. With
         `replace_only`, a reply that has been deleted stays deleted, and this returns False.
         """
+        where = f"{place_text(message.guild, message.channel)}: {message.jump_url}"
         cards = await self._look_up(
-            queries, message_origin(message), message.content, known, logged, message.jump_url
+            queries, message_origin(message), message.content, known, logged, where
         )
         kwargs, reply = await self._compose(cards, message.author.id, embeds)
         if sent is not None:
@@ -1193,20 +1231,27 @@ class BookBot(discord.Client):
         # with "thinking…" first, which the card then replaces. Discord treats that as an
         # edit, tends to drop the cover from it, and the re-send that brings the cover
         # back (see ensure_covers) leaves the reply marked "(edited)".
-        where = f"/book in <#{interaction.channel_id}>" if interaction.guild else "/book in a DM"
-        lookup = asyncio.create_task(
-            self._respond([query], interaction.user.id, command_origin(interaction), where=where)
-        )
+        where = f"/book in {place_text(interaction.guild, interaction.channel)}"
+
+        async def respond():
+            cards = await self._look_up([query], command_origin(interaction), where=where)
+            return cards, *await self._compose(cards, interaction.user.id)
+
+        lookup = asyncio.create_task(respond())
         done, _ = await asyncio.wait({lookup}, timeout=DIRECT_ANSWER_WITHIN)
         if done:
-            kwargs, reply = lookup.result()
+            cards, kwargs, reply = lookup.result()
             await interaction.response.send_message(**kwargs)
             sent = await interaction.original_response()
         else:
             await interaction.response.defer()
-            kwargs, reply = await lookup
+            cards, kwargs, reply = await lookup
             sent = await interaction.followup.send(wait=True, **kwargs)
         self._sent(reply, kwargs, sent, COMMAND_REPLY_EXPIRES_AFTER, retire=True)
+        # Nothing else records where a /book reply is, and /retry-missed needs to know.
+        mention_ids = [card.mention_id for card in cards if card.mention_id]
+        if mention_ids:
+            self.spawn(self.record_reply(mention_ids, sent.id))
 
     # --- /help -----------------------------------------------------------------------------
 
@@ -1275,8 +1320,9 @@ class BookBot(discord.Client):
         For the owner, after adding the missing books to Hardcover: each reply that said
         it couldn't find a book is changed to show it. Likewise, after filling in a cover
         or blurb on Hardcover, each card that lacked one gets the cover, and its title
-        links to Hardcover again. /book replies are not covered, since nothing records
-        where they are and they can only be edited for 15 minutes.
+        links to Hardcover again. That includes /book replies, but a /book that found
+        nothing is left as it is: a card put into it would need the asker's ID for its
+        buttons, and the log doesn't keep that.
         """
         if interaction.user.id != self._owner_id:
             await interaction.response.send_message(
@@ -1295,7 +1341,9 @@ class BookBot(discord.Client):
             by_message.setdefault(miss.message_id, []).append(miss)
         incomplete_by_message: dict[int, list[Incomplete]] = {}
         for entry in await self.usage.incomplete(hours):
-            incomplete_by_message.setdefault(entry.message_id, []).append(entry)
+            # A /book has one card and no message; an old one has no reply ID either.
+            key = entry.message_id or entry.reply_id or entry.mention_id
+            incomplete_by_message.setdefault(key, []).append(entry)
         total = sum(len(misses) for misses in by_message.values())
         incomplete = sum(len(entries) for entries in incomplete_by_message.values())
         parts = []
@@ -1464,19 +1512,26 @@ class BookBot(discord.Client):
 
         `filled` has those books, by ID, as Hardcover has them now. Returns the reply and
         the books filled in, or None if nothing was changed: the message or the reply is
-        gone, or its cards show other books by now.
+        gone, or its cards show other books by now. `entries` are for one message, or for
+        one /book reply.
         """
-        message_id = entries[0].message_id
-        async with self._one_at_a_time(message_id):
-            answered = self.answered.get(message_id)
+        first = entries[0]
+        async with self._one_at_a_time(first.message_id or first.reply_id or first.mention_id):
+            answered = self.answered.get(first.message_id) if first.message_id else None
+            live = None
             if answered:
                 sent, embeds = answered.message, answered.embeds
             else:
-                message = await self._fetch_asked(entries[0], None)
-                sent = message and await self._find_reply(message)
+                if first.message_id:
+                    message = await self._fetch_asked(first, None)
+                    sent = message and await self._find_reply(message)
+                else:
+                    sent = await self._fetch_command_reply(first)
                 if sent is None:
                     return None
-                embeds = list(sent.embeds)
+                # A /book reply can still have "Wrong book?", whose cards these are.
+                live = self.replies.get(sent.id)
+                embeds = live.embeds if live else list(sent.embeds)
             books: list[Book] = []
             for embed in embeds:
                 book = filled.get(hardcover_book_id(embed.description or ""))
@@ -1490,15 +1545,15 @@ class BookBot(discord.Client):
             except discord.NotFound:
                 return None
             if answered:
-                # So that a card made again from these, as when a book is switched back
-                # with "Wrong book?", keeps the cover too.
                 answered.message = shown
-                for card in answered.cards:
-                    if card.book:
-                        card.book = _with_cover_and_blurb(card.book, filled)
-                    card.alternatives[:] = [
-                        _with_cover_and_blurb(book, filled) for book in card.alternatives
-                    ]
+            # So that a card made again from these, as when a book is switched back with
+            # "Wrong book?", keeps the cover too.
+            for card in answered.cards if answered else live.cards if live else []:
+                if card.book:
+                    card.book = _with_cover_and_blurb(card.book, filled)
+                card.alternatives[:] = [
+                    _with_cover_and_blurb(book, filled) for book in card.alternatives
+                ]
             self.spawn(self.ensure_covers(shown, embeds, shown))
             await self.usage.completed(
                 [entry.mention_id for entry in entries if entry.book_id in filled]
@@ -1537,6 +1592,35 @@ class BookBot(discord.Client):
                 continue
         return None
 
+    async def _fetch_command_reply(self, entry: Incomplete) -> discord.Message | None:
+        """A /book reply, or None if it can't be had any more.
+
+        A record from before reply IDs were kept is matched by looking through the channel
+        from shortly before the lookup for the bot's /book reply showing the book.
+        """
+        place_id = entry.thread_id or entry.channel_id
+        try:
+            place = self.get_channel(place_id) or await self.fetch_channel(place_id)
+            if not hasattr(place, "history"):  # a forum, whose posts are threads
+                return None
+            if entry.reply_id:
+                return await place.fetch_message(entry.reply_id)
+            # A slow lookup is answered by editing a "thinking…" sent before it was logged.
+            since = datetime.datetime.fromisoformat(entry.mentioned_at) - OLD_REPLY_LEEWAY
+            async for later in place.history(after=since, limit=REPLY_SEARCH_LIMIT):
+                if (
+                    later.author.id == self.user.id
+                    and later.interaction_metadata is not None
+                    and any(
+                        hardcover_book_id(embed.description or "") == entry.book_id
+                        for embed in later.embeds
+                    )
+                ):
+                    return later
+        except discord.HTTPException:
+            return None
+        return None
+
     async def _shown_cards(
         self, queries: list[str], sent: discord.Message, logged: dict[str, int]
     ) -> dict[str, Card]:
@@ -1571,7 +1655,7 @@ class BookBot(discord.Client):
                 await interaction.response.send_message(text, ephemeral=True)
         except discord.HTTPException:
             pass
-        channel = f"<#{interaction.channel_id}>" if interaction.channel_id else "a DM"
+        channel = place_text(interaction.guild, interaction.channel)
         original = getattr(error, "original", error)
         await self.report_error(f"the /{name} command in {channel}", original)
 

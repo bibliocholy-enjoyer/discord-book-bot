@@ -173,7 +173,8 @@ it unset and records nothing). For each book someone asks for, it keeps:
   again and fills in the record when the book turns up. It also notes whether Hardcover
   had a cover and blurb for the book, so `/retry-missed` can fill those in later;
 - whether it was a `{…}` message or `/book`, and the ID of the message (so it can be
-  found again, but the text is not kept);
+  found again, but the text is not kept). A `/book` has no message, so it keeps the ID of
+  the bot's reply instead, for `/retry-missed` to fill in a missing cover;
 - a label (positive, negative or neutral) and score for the message, from a small
   word-list sentiment checker. It ignores the `{…}` text itself, and every book in one
   message gets the same score;

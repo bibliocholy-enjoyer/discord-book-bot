@@ -21,6 +21,8 @@ from tests.test_edits import (
     logged,
     pick,
     restart,
+    server_command,
+    settled,
     wrong_book,
 )
 
@@ -355,3 +357,54 @@ async def test_a_reply_changed_both_ways_counts_once(bot, added, filled_in):
     assert f"**Updated 1 reply:**\n- Piranesi, Dune: {reply.jump_url}" in told
     assert reply.titles() == ["Dune", "Piranesi"]
     assert reply.embeds[0].thumbnail.url == COVER
+
+
+@pytest.mark.parametrize("restarted", [False, True])
+async def test_a_book_command_card_gets_its_cover(bot, filled_in, goodreads_pages, restarted):
+    place = FakeMessage("")
+    await bot.handle_command(server_command(place), "dune")
+    await settled(bot)
+    [reply] = place.replies
+    assert reply.embeds[0].url == "https://www.goodreads.com/book/show/1"
+    if restarted:
+        restart(bot)  # or "Wrong book?" has been put away; either way only Discord has it
+    filled_in(DUNE)
+
+    told = await retry(bot, place)
+    assert bot.fetched == [[1]] and reply.edits == 1
+    [card] = reply.embeds
+    assert (card.url, card.thumbnail.url) == (hardcover_book_url(1), COVER)
+    assert "1 book without a cover or blurb, in 1 reply" in told
+    assert f"**Updated 1 reply:**\n- Dune: {reply.jump_url}" in told
+    if not restarted:
+        # "Wrong book?" switching back to Dune would make its card again from this.
+        assert bot.replies[reply.id].cards[0].book.cover_url == COVER
+
+    await retry(bot, place)
+    assert reply.edits == 1  # done with
+
+
+async def test_a_book_command_from_before_replies_were_logged_is_found(
+    bot, filled_in, goodreads_pages
+):
+    place = FakeMessage("")
+    await bot.handle_command(server_command(place), "circe")
+    await bot.handle_command(server_command(place), "dune")
+    await settled(bot)
+    circe, dune = place.replies
+    bot.usage._db.execute("UPDATE mentions SET reply_id = NULL")
+    restart(bot)
+    filled_in(DUNE)
+
+    told = await retry(bot, place)
+    assert circe.edits == 0 and dune.edits == 1
+    assert dune.embeds[0].thumbnail.url == COVER and "Updated 1 reply" in told
+
+
+async def test_a_book_command_that_found_nothing_is_left_as_it_is(bot, added):
+    place = FakeMessage("")
+    await bot.handle_command(server_command(place), "nothing")
+    await settled(bot)
+    added()
+
+    assert (await retry(bot, place)).startswith("Nothing to retry")
