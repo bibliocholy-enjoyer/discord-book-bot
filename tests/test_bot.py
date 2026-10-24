@@ -209,13 +209,29 @@ async def test_delete_is_for_requester_and_moderators(bot):
     assert [name for name, _ in calls] == ["send_message"] and MESSAGE_ID in bot.replies
 
     calls = []
-    await DeleteButton(REQUESTER).callback(interaction(bot, STRANGER, calls, manage_messages=True))
-    assert [name for name, _ in calls] == ["defer", "delete_original_response"]
-
-    await remembered(bot, ["dune"])
-    calls = []
     await DeleteButton(REQUESTER).callback(interaction(bot, REQUESTER, calls))
     assert [name for name, _ in calls] == ["defer", "delete_original_response"]
+    assert MESSAGE_ID not in bot.replies
+
+
+async def test_moderators_confirm_before_deleting(bot):
+    await remembered(bot, ["dune"])
+    calls = []
+    await DeleteButton(REQUESTER).callback(interaction(bot, STRANGER, calls, manage_messages=True))
+    assert [name for name, _ in calls] == ["defer", "send"]
+    prompt = calls[1][1]
+    assert prompt["ephemeral"] and f"<@{REQUESTER}>" in prompt["args"][0]
+    confirm = prompt["view"]
+    assert MESSAGE_ID in bot.replies
+
+    calls.clear()
+    await confirm.cancel.callback(interaction(bot, STRANGER, calls, manage_messages=True))
+    assert [name for name, _ in calls] == ["edit_message"] and MESSAGE_ID in bot.replies
+
+    calls.clear()
+    await confirm.delete.callback(interaction(bot, STRANGER, calls, manage_messages=True))
+    # The moderator's first click, not the click on the prompt, deletes the reply.
+    assert [name for name, _ in calls] == ["delete_original_response", "edit_message"]
     assert MESSAGE_ID not in bot.replies
 
 

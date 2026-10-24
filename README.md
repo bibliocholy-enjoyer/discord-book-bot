@@ -19,7 +19,8 @@ Try it out on [the BookBot HQ Discord server](https://discord.gg/6qjApAQ556), or
 - `/help` explains all this, privately, with the link for adding the bot.
 - Editing a message updates its reply: add a `{…}` to get one, change it to swap the book,
   or remove it to take the reply away.
-- The reply has a 🗑️ button so the person who asked can delete it, and a "Wrong book?"
+- The reply has a "🗑️ Delete" button so the person who asked can delete it (moderators
+  can too, after confirming), and a "Wrong book?"
   button that privately offers them the other matches. On a reply to a message it keeps
   working, even after the bot restarts; on a `/book` reply it is there for 14 minutes.
 - The card's title links to the book on Hardcover, unless Hardcover has no cover or no
