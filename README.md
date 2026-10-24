@@ -32,6 +32,10 @@ Try it out on [the BookBot HQ Discord server](https://discord.gg/6qjApAQ556), or
   into the replies that couldn't find it (see
   [Filling in books that weren't found](#filling-in-books-that-werent-found)).
 - Replies never ping anyone.
+- In a server that has added the bot but where nobody has used `{…}` yet, a `/book` reply
+  tells the person who asked that they can type `{Book Title}` instead. Each person sees
+  this once per server, and it stops for everyone once someone there uses `{…}`. It needs
+  the usage log, which is where it remembers who has seen it.
 - Optionally logs which books are asked for, and where, to a SQLite file (never message text
   or user IDs). See [Looking at the stats](#looking-at-the-stats).
 

@@ -62,6 +62,15 @@ CREATE INDEX IF NOT EXISTS mentions_book ON mentions (book_id);
 CREATE INDEX IF NOT EXISTS mentions_guild ON mentions (guild_id);
 CREATE INDEX IF NOT EXISTS mentions_message ON mentions (message_id);
 
+-- Who has been shown the tip about {…} on a /book reply, so each person sees it once
+-- per server.
+CREATE TABLE IF NOT EXISTS tips_shown (
+    guild_id INTEGER NOT NULL,
+    user_hash TEXT NOT NULL,
+    shown_at TEXT NOT NULL,
+    PRIMARY KEY (guild_id, user_hash)
+);
+
 -- Filled in by hand: a duplicate Hardcover entry, and the one to count it as.
 CREATE TABLE IF NOT EXISTS book_merges (
     book_id INTEGER PRIMARY KEY,
@@ -188,6 +197,14 @@ class UsageLog:
         """The asker edited these queries out of their message."""
         await asyncio.to_thread(self._forget, mention_ids)
 
+    async def claim_tip(self, guild_id: int, user_id: int) -> bool | None:
+        """Whether this person should be shown the tip about {…} now, in this server.
+
+        True only the first time it is asked for them there, so asking counts as
+        showing it. None if the server has used {…} already, so it needs no tip.
+        """
+        return await asyncio.to_thread(self._claim_tip, guild_id, user_id)
+
     async def mentions_in_message(self, message_id: int) -> dict[str, int]:
         """The queries already recorded for a message, lowercased -> their row IDs."""
         return await asyncio.to_thread(self._mentions_in_message, message_id)
@@ -272,6 +289,20 @@ class UsageLog:
                 "UPDATE mentions SET reply_id = ? WHERE id = ?",
                 [(reply_id, mention_id) for mention_id in mention_ids],
             )
+
+    def _claim_tip(self, guild_id: int, user_id: int) -> bool | None:
+        with self._lock, self._db:
+            braces = self._db.execute(
+                "SELECT 1 FROM mentions WHERE guild_id = ? AND source = 'message' LIMIT 1",
+                (guild_id,),
+            ).fetchone()
+            if braces:
+                return None
+            cursor = self._db.execute(
+                "INSERT OR IGNORE INTO tips_shown (guild_id, user_hash, shown_at) VALUES (?, ?, ?)",
+                (guild_id, hash_user(self._salt, user_id), _now()),
+            )
+            return cursor.rowcount == 1
 
     def _completed(self, mention_ids: list[int]) -> None:
         with self._lock, self._db:

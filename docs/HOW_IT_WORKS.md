@@ -186,6 +186,8 @@ It does **not** keep the text of any message, anyone's Discord ID or name, or an
 from direct messages or from servers that haven't added the bot (where someone used
 `/book` from their own account). It also keeps one row per Hardcover book seen (title, authors,
 series, year, pages, genres, popularity), which comes from the lookup that was done anyway.
+And for the tip about `{…}` on `/book` replies, it keeps which people (by the same hash)
+have been shown it in each server, so each person only sees it once.
 
 Hardcover sometimes has several entries for one book. The log records whichever the bot
 matched, and a `book_merges` table (empty to begin with) says "treat book 3 as book 1".
