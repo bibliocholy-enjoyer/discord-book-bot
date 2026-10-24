@@ -658,6 +658,7 @@ async def test_a_book_command_in_a_server_names_the_channel(bot, owner_dms):
     await bot.handle_command(server_command(place), "nothing")
     await bot.handle_command(server_command(place), "circe")
     await reported(bot)
+    await settled(bot)  # or the log is closed under it
     missing, gap = owner_dms
     # By name: a channel mention shows as "#unknown" to an owner not in the server.
     assert "/book in #general in **RfM**" in missing and "<#" not in missing
