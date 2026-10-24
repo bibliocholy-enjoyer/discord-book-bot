@@ -61,9 +61,7 @@ def filled_in(monkeypatch):
     return fill
 
 
-async def retry(
-    bot, *messages, user_id=OWNER, hours=24, covers_and_blurbs=None, dry_run=False
-):
+async def retry(bot, *messages, user_id=OWNER, hours=24, covers_and_blurbs=None, dry_run=False):
     """Run /retry-missed; returns the last thing the person who ran it was told."""
     bot._owner_id = OWNER
     bot.lookups.clear()
