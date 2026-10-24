@@ -55,8 +55,8 @@ MATCHES_REMEMBERED_FOR = 60 * 60
 COMMAND_REPLY_EXPIRES_AFTER = 14 * 60
 # Added to a /book reply in a server that hasn't used {…}, once for each person there.
 BOOK_TIP = (
-    "-# Tip: instead of using /book, you can also type {Book Title} or "
-    "{Book Title by Author} in any message, and I’ll reply with its info."
+    "-# Tip: You can also type {Book Title} or {Book Title by Author} in any message, "
+    "and I’ll reply with its info."
 )
 # Seconds /book waits for its lookup before saying it is still working on it. Discord
 # wants some answer within 3 seconds of the command, counting the time it takes to arrive.
