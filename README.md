@@ -194,12 +194,19 @@ fill those in there, run `/retry-missed`, and each card for the book gets the co
 its title linking to Hardcover again.
 
 Only you can see its answer, which says how many queries, books and replies it went
-over, links to the replies it updated, and lists what is still missing.
+over, links to the replies it updated (naming the channel and server, for servers you
+aren't in), and lists what is still missing. If a reply couldn't be reached because the
+bot lacks a permission in its channel, the answer says which.
+
+To check first, run `/retry-missed dry_run:True`: it finds every reply it would update
+and gives the same answer, but changes nothing.
 
 - Only the bot's owner can use it, and it is not offered in servers at all, only in a DM
   with the bot.
 - It needs the usage log, which is where the missed queries are kept.
-- It covers `{…}` messages, not `/book` replies.
+- It covers `{…}` messages in servers that have added the bot. For `/book` there, it fills
+  in covers, but a `/book` that found nothing keeps saying so: the bot would need to know
+  who asked to give the card its buttons, and it doesn't keep that.
 - A book added to Hardcover moments ago may not be in its search yet; run it again later.
 
 ## Looking at the stats
@@ -208,7 +215,8 @@ If the bot has a usage log (see [what it records](docs/HOW_IT_WORKS.md#what-the-
 print a summary of it from your own computer. It starts with where the bot is installed
 right now (every server, and how many people have added it to their own account), then
 shows the ten most mentioned books (counting different people first, then mentions, then
-how recently they were asked for), servers, channels, and searches that found nothing:
+how recently they were asked for), servers (with how many lookups used `{…}` and how many
+`/book`), channels, and searches that found nothing:
 
 ```bash
 scripts/stats

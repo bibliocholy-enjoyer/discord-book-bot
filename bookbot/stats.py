@@ -106,7 +106,9 @@ REPORTS = [
     (
         "servers",
         "Servers",
-        "SELECT guild_name, guild_id, COUNT(*) AS mentions, COUNT(DISTINCT user_hash) AS people,"
+        "SELECT guild_name, guild_id, COUNT(*) AS mentions,"
+        " SUM(source = 'message') AS braces, SUM(source = 'command') AS slash_book,"
+        " COUNT(DISTINCT user_hash) AS people,"
         " MAX(mentioned_at) AS last_used FROM counted GROUP BY guild_id"
         " ORDER BY mentions DESC LIMIT 25",
     ),

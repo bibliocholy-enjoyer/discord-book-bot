@@ -2,7 +2,8 @@
 
 What is stored: the book, when and where it was asked for (server and channel), the title
 text typed inside the braces, a sentiment label for the message, a salted hash of the
-asker, and the ID of their message. What is not: the message text, user IDs, or names.
+asker, and the ID of their message (for /book, of the bot's reply). What is not: the
+message text, user IDs, or names.
 """
 
 import asyncio
@@ -54,7 +55,8 @@ CREATE TABLE IF NOT EXISTS mentions (
     message_id INTEGER,                  -- NULL for /book
     thread_id INTEGER,                   -- the thread, if the message was in one
     thread_name TEXT,                    -- its name then; a forum post is a thread too
-    incomplete INTEGER NOT NULL DEFAULT 0    -- 1 while the card lacks a cover or blurb
+    incomplete INTEGER NOT NULL DEFAULT 0,   -- 1 while the card lacks a cover or blurb
+    reply_id INTEGER                     -- /book only: the bot's reply, so it can be edited
 );
 CREATE INDEX IF NOT EXISTS mentions_book ON mentions (book_id);
 CREATE INDEX IF NOT EXISTS mentions_guild ON mentions (guild_id);
@@ -97,13 +99,19 @@ class Miss:
 
 @dataclass(frozen=True)
 class Incomplete:
-    """A book a message's reply showed when Hardcover had no cover or blurb for it."""
+    """A book a reply showed when Hardcover had no cover or blurb for it.
+
+    The reply is to a message, or for /book, is found by its own ID: `reply_id`, which
+    records from before it was kept don't have.
+    """
 
     mention_id: int
     book_id: int
-    message_id: int
+    message_id: int | None  # None for /book
     channel_id: int | None
     thread_id: int | None
+    reply_id: int | None = None
+    mentioned_at: str = ""
 
 
 def _now() -> str:
@@ -135,6 +143,7 @@ class UsageLog:
                 ("thread_id", "INTEGER"),
                 ("thread_name", "TEXT"),
                 ("incomplete", "INTEGER NOT NULL DEFAULT 0"),
+                ("reply_id", "INTEGER"),
             ):
                 if column not in columns:
                     self._db.execute(f"ALTER TABLE mentions ADD COLUMN {column} {kind}")
@@ -166,6 +175,10 @@ class UsageLog:
     async def incomplete(self, hours: int) -> list[Incomplete]:
         """The books shown in replies from the last `hours` that lacked a cover or blurb."""
         return await asyncio.to_thread(self._incomplete, hours)
+
+    async def replied(self, mention_ids: list[int], reply_id: int) -> None:
+        """These /book lookups were answered with this message."""
+        await asyncio.to_thread(self._replied, mention_ids, reply_id)
 
     async def completed(self, mention_ids: list[int]) -> None:
         """These replies' cards have their cover and blurb now."""
@@ -245,12 +258,20 @@ class UsageLog:
         since = (datetime.now(UTC) - timedelta(hours=hours)).isoformat(timespec="seconds")
         with self._lock:
             found = self._db.execute(
-                "SELECT id, book_id, message_id, channel_id, thread_id FROM mentions"
-                " WHERE incomplete = 1 AND book_id IS NOT NULL AND message_id IS NOT NULL"
+                "SELECT id, book_id, message_id, channel_id, thread_id, reply_id, mentioned_at"
+                " FROM mentions WHERE incomplete = 1 AND book_id IS NOT NULL"
+                " AND (message_id IS NOT NULL OR source = 'command')"
                 " AND mentioned_at >= ? ORDER BY id",
                 (since,),
             ).fetchall()
         return [Incomplete(*row) for row in found]
+
+    def _replied(self, mention_ids: list[int], reply_id: int) -> None:
+        with self._lock, self._db:
+            self._db.executemany(
+                "UPDATE mentions SET reply_id = ? WHERE id = ?",
+                [(reply_id, mention_id) for mention_id in mention_ids],
+            )
 
     def _completed(self, mention_ids: list[int]) -> None:
         with self._lock, self._db:
