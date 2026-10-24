@@ -53,6 +53,11 @@ MATCHES_REMEMBERED_FOR = 60 * 60
 # the query from again, and the reply can only be edited through its interaction token,
 # which Discord expires after 15 minutes, so the button has to be removed before then.
 COMMAND_REPLY_EXPIRES_AFTER = 14 * 60
+# Added to a /book reply in a server that hasn't used {…}, once for each person there.
+BOOK_TIP = (
+    "-# Tip: instead of using /book, you can also type {Book Title} or "
+    "{Book Title by Author} in any message, and I’ll reply with its info."
+)
 # Seconds /book waits for its lookup before saying it is still working on it. Discord
 # wants some answer within 3 seconds of the command, counting the time it takes to arrive.
 DIRECT_ANSWER_WITHIN = 2.0
@@ -612,6 +617,8 @@ class BookBot(discord.Client):
         self._owner_id: int | None = config.owner_id
         self._last_owner_dm: dict[str, float] = {}
         self._last_gap_dm: dict[str, float] = {}
+        # Servers known to have used {…}, which get no tip about it (see _wants_tip).
+        self._braces_servers: set[int] = set()
         self.error_reaction: discord.Emoji | str = ERROR_REACTION
         self.replies: dict[int, Reply] = {}  # by the ID of the bot's reply message
         self.answered: dict[int, Answered] = {}  # by the ID of the message replied to
@@ -1240,8 +1247,13 @@ class BookBot(discord.Client):
         where = f"/book in {place_text(interaction.guild, interaction.channel)}"
 
         async def respond():
+            tip = asyncio.create_task(self._wants_tip(interaction))
             cards = await self._look_up([query], command_origin(interaction), where=where)
-            return cards, *await self._compose(cards, interaction.user.id)
+            kwargs, reply = await self._compose(cards, interaction.user.id)
+            if await tip:
+                # Later edits to the reply only change its cards and buttons, so it stays.
+                kwargs["content"] = "\n".join(filter(None, [kwargs.get("content"), BOOK_TIP]))
+            return cards, kwargs, reply
 
         lookup = asyncio.create_task(respond())
         done, _ = await asyncio.wait({lookup}, timeout=DIRECT_ANSWER_WITHIN)
@@ -1258,6 +1270,27 @@ class BookBot(discord.Client):
         mention_ids = [card.mention_id for card in cards if card.mention_id]
         if mention_ids:
             self.spawn(self.record_reply(mention_ids, sent.id))
+
+    async def _wants_tip(self, interaction: discord.Interaction) -> bool:
+        """Whether a /book reply should tell its asker about {…}.
+
+        Only in a server that has added the bot, since {…} works nowhere else, and only
+        in a channel the bot can see. There, each person is told once, as long as nobody
+        in the server has used {…}. Never raises: the reply matters more than the tip.
+        """
+        guild = interaction.guild
+        if not (self.usage and guild and interaction.is_guild_integration()):
+            return False
+        if guild.id in self._braces_servers or not interaction.app_permissions.view_channel:
+            return False
+        try:
+            claimed = await self.usage.claim_tip(guild.id, interaction.user.id)
+        except Exception as error:
+            await self.report_error("checking whether to show the {…} tip", error)
+            return False
+        if claimed is None:
+            self._braces_servers.add(guild.id)
+        return bool(claimed)
 
     # --- /help -----------------------------------------------------------------------------
 

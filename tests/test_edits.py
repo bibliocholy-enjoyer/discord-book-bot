@@ -129,6 +129,7 @@ async def bot(tmp_path, monkeypatch):
     monkeypatch.setattr(botmod, "find_book", find_book)
     bot.hardcover, bot.links_for, bot.report_error = None, links_for, report_error
     yield bot
+    await settled(bot)  # a write still going when the log is closed crashes Python
     for task in bot._background_tasks:
         task.cancel()
     bot.usage.close()
@@ -538,7 +539,7 @@ def command(calls):
     )
 
 
-def server_command(place):
+def server_command(place, user_id=REQUESTER, sees_channel=True):
     """/book in a server that has added the bot. The replies go into `place.replies`,
     `place` being a FakeMessage standing in for the channel."""
 
@@ -552,11 +553,12 @@ def server_command(place):
         return place.replies[-1]
 
     return SimpleNamespace(
-        user=SimpleNamespace(id=REQUESTER),
+        user=SimpleNamespace(id=user_id),
         guild=place.guild,
         channel=place.channel,
         channel_id=place.channel.id,
         is_guild_integration=lambda: True,
+        app_permissions=SimpleNamespace(view_channel=sees_channel),
         response=SimpleNamespace(send_message=send_message),
         original_response=original_response,
     )
@@ -658,7 +660,6 @@ async def test_a_book_command_in_a_server_names_the_channel(bot, owner_dms):
     await bot.handle_command(server_command(place), "nothing")
     await bot.handle_command(server_command(place), "circe")
     await reported(bot)
-    await settled(bot)  # or the log is closed under it
     missing, gap = owner_dms
     # By name: a channel mention shows as "#unknown" to an owner not in the server.
     assert "/book in #general in **RfM**" in missing and "<#" not in missing
@@ -674,3 +675,76 @@ async def test_a_braces_message_in_a_dm_is_reported_too(bot, owner_dms):
     await reported(bot)
     [dm] = owner_dms
     assert "**Circe**" in dm and message.jump_url in dm
+
+
+# --- The tip about {…} on /book -----------------------------------------------------------
+
+
+def tipped(reply):
+    return botmod.BOOK_TIP in (reply.shown.get("content") or "")
+
+
+async def test_each_person_gets_the_tip_once(bot):
+    place = FakeMessage("")
+    await bot.handle_command(server_command(place), "dune")
+    await bot.handle_command(server_command(place), "circe")
+    await bot.handle_command(server_command(place, user_id=43), "dune")
+    await settled(bot)
+    assert [tipped(reply) for reply in place.replies] == [True, False, True]
+    assert "{Book Title by Author}" in place.replies[0].shown["content"]
+
+
+async def test_a_reply_that_found_nothing_gets_the_tip_under_it(bot):
+    place = FakeMessage("")
+    await bot.handle_command(server_command(place), "nothing")
+    await settled(bot)
+    content = place.replies[0].shown["content"]
+    assert content.startswith("Couldn't find") and content.endswith(botmod.BOOK_TIP)
+
+
+async def test_no_tip_once_the_server_has_used_braces(bot):
+    await bot.on_message(FakeMessage("{dune}"))
+    place = FakeMessage("")
+    await bot.handle_command(server_command(place), "circe")
+    await settled(bot)
+    assert not tipped(place.replies[0])
+    assert bot._braces_servers == {10}  # so the log isn't asked again
+
+
+async def test_no_tip_where_braces_would_not_work(bot):
+    calls = []
+    await bot.handle_command(command(calls), "dune")  # a DM
+    assert "content" not in calls[0][1]
+
+    place = FakeMessage("")
+    await bot.handle_command(server_command(place, sees_channel=False), "dune")
+    # Not used up there: the person gets it in a channel the bot can see.
+    await bot.handle_command(server_command(place), "circe")
+    await settled(bot)
+    assert [tipped(reply) for reply in place.replies] == [False, True]
+
+
+async def test_the_tip_stays_when_the_book_is_switched(bot):
+    place = FakeMessage("")
+    await bot.handle_command(server_command(place), "dune")
+    await settled(bot)
+    [reply] = place.replies
+    await pick(bot, reply, DUNE_MESSIAH)
+    assert reply.titles() == ["Dune Messiah"] and tipped(reply)
+
+
+async def test_a_broken_log_costs_only_the_tip(bot):
+    reported = []
+
+    async def report_error(where, error):
+        reported.append(where)
+
+    async def claim_tip(guild_id, user_id):
+        raise RuntimeError("disk full")
+
+    bot.report_error, bot.usage.claim_tip = report_error, claim_tip
+    place = FakeMessage("")
+    await bot.handle_command(server_command(place), "dune")
+    [reply] = place.replies
+    assert reply.titles() == ["Dune"] and not tipped(reply)
+    assert reported == ["checking whether to show the {…} tip"]
