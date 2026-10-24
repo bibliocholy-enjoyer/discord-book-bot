@@ -145,7 +145,9 @@ spacing and fonts are close but not exact. Run the command again after each chan
   </div>
   {cover}
 </div>
-<div class="buttons"><span class="button">Wrong book?</span><span class="button">🗑️</span></div>
+<div class="buttons">
+  <span class="button">Wrong book?</span><span class="button">🗑️ Delete</span>
+</div>
 
 <h2>When a book isn't found</h2>
 <div>{not_found}</div>

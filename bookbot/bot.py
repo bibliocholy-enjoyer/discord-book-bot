@@ -138,16 +138,18 @@ class Reply:
 class DeleteButton(
     discord.ui.DynamicItem[discord.ui.Button], template=r"bookbot:delete:(?P<user_id>\d+)"
 ):
-    """Lets whoever asked for a reply remove it.
+    """Lets whoever asked for a reply remove it, as can moderators once they confirm.
 
     The requester's ID lives in the button's custom_id, so this keeps working across
-    bot restarts without any stored state.
+    bot restarts without any stored state. The button has a label as well as the emoji,
+    since an emoji alone in a gray box looks like a reaction and gets clicked as one.
     """
 
     def __init__(self, user_id: int):
         super().__init__(
             discord.ui.Button(
                 emoji="🗑️",
+                label="Delete",
                 style=discord.ButtonStyle.secondary,
                 custom_id=f"bookbot:delete:{user_id}",
             )
@@ -167,9 +169,56 @@ class DeleteButton(
                 "Only the person who asked for this can delete it.", ephemeral=True
             )
             return
-        interaction.client.replies.pop(interaction.message.id, None)
         await interaction.response.defer()
+        if not is_requester:
+            # A moderator may not know what the button does, so ask them first.
+            confirm = ConfirmDelete(interaction)
+            confirm.prompt = await interaction.followup.send(
+                f"<@{self.user_id}> asked for this reply. Delete it for everyone?",
+                view=confirm,
+                ephemeral=True,
+                wait=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        interaction.client.replies.pop(interaction.message.id, None)
         await interaction.delete_original_response()
+
+
+class ConfirmDelete(discord.ui.View):
+    """Privately asks a moderator before they delete someone else's reply.
+
+    The moderator's click on the delete button was deferred rather than answered, so
+    that interaction can still delete the reply the button is on, but only for 15
+    minutes; the prompt gives up before then. It also doesn't survive a bot restart.
+    """
+
+    def __init__(self, click: discord.Interaction):
+        super().__init__(timeout=10 * 60)
+        self.click = click
+        self.prompt: discord.WebhookMessage | None = None
+
+    @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger)
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.stop()
+        self.click.client.replies.pop(self.click.message.id, None)
+        try:
+            await self.click.delete_original_response()
+        except discord.NotFound:
+            pass  # someone else deleted it first
+        await interaction.response.edit_message(content="Deleted.", view=None)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.stop()
+        await interaction.response.edit_message(content="Left the reply alone.", view=None)
+
+    async def on_timeout(self) -> None:
+        if self.prompt is not None:
+            with contextlib.suppress(discord.HTTPException):
+                await self.prompt.edit(
+                    content="Left the reply alone. Click Delete again to remove it.", view=None
+                )
 
 
 class WrongBookButton(
@@ -564,7 +613,7 @@ def help_text(application_id: int, support_url: str | None) -> str:
         "\n"
         "**On a reply**\n"
         "• **Wrong book?** shows the other matches, just to you\n"
-        "• 🗑️ deletes the reply\n"
+        "• **Delete** removes the reply\n"
         "• Editing your message updates the reply, and taking out the braces removes it\n"
         "\n"
         "**Add me**\n"
