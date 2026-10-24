@@ -86,7 +86,7 @@ class FakeMessage:
 
     async def reply(self, mention_author=False, **kwargs):
         self.replies.append(FakeReply(self.id, kwargs))
-        self.replies[-1].channel = self.channel
+        self.replies[-1].channel, self.replies[-1].guild = self.channel, self.guild
         return self.replies[-1]
 
     async def _fetch_message(self, message_id):
@@ -545,6 +545,7 @@ def server_command(place):
     async def send_message(**kwargs):
         reply = FakeReply(None, kwargs)
         reply.reference, reply.interaction_metadata = None, SimpleNamespace()
+        reply.channel, reply.guild = place.channel, place.guild
         place.replies.append(reply)
 
     async def original_response():

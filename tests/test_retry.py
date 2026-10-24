@@ -3,6 +3,7 @@
 import sqlite3
 from types import SimpleNamespace
 
+import discord
 import pytest
 
 from bookbot.hardcover import Book, HardcoverError
@@ -60,7 +61,9 @@ def filled_in(monkeypatch):
     return fill
 
 
-async def retry(bot, *messages, user_id=OWNER, hours=24, covers_and_blurbs=None):
+async def retry(
+    bot, *messages, user_id=OWNER, hours=24, covers_and_blurbs=None, dry_run=False
+):
     """Run /retry-missed; returns the last thing the person who ran it was told."""
     bot._owner_id = OWNER
     bot.lookups.clear()
@@ -81,7 +84,7 @@ async def retry(bot, *messages, user_id=OWNER, hours=24, covers_and_blurbs=None)
         response=Recorder(calls),
         edit_original_response=Recorder(calls).edit_original_response,
     )
-    await bot.handle_retry(interaction, hours)
+    await bot.handle_retry(interaction, hours, dry_run)
     told = calls[-1][1]
     return told.get("content") or told["args"][0]
 
@@ -288,7 +291,7 @@ async def test_a_card_gets_its_cover_once_hardcover_has_it(bot, filled_in, goodr
     assert (dune.url, dune.thumbnail.url) == (hardcover_book_url(1), COVER)
     assert (circe.url, circe.thumbnail.url) == ("https://www.goodreads.com/book/show/3", None)
     assert "2 books without a cover or blurb, in 1 reply, from the last 24 hours" in told
-    assert f"**Updated 1 reply:**\n- Dune: {reply.jump_url}" in told
+    assert f"**Updated 1 reply:**\n- Dune (#general in **RfM**): {reply.jump_url}" in told
     assert "**Still without a cover or blurb (1):** Circe" in told
     # The card kept in memory has the cover too, for when a book is switched back to it.
     assert bot.answered[message.id].cards[0].book.cover_url == COVER
@@ -354,7 +357,7 @@ async def test_a_reply_changed_both_ways_counts_once(bot, added, filled_in):
     filled_in(DUNE)
 
     told = await retry(bot, message)
-    assert f"**Updated 1 reply:**\n- Piranesi, Dune: {reply.jump_url}" in told
+    assert f"**Updated 1 reply:**\n- Piranesi, Dune (#general in **RfM**): {reply.jump_url}" in told
     assert reply.titles() == ["Dune", "Piranesi"]
     assert reply.embeds[0].thumbnail.url == COVER
 
@@ -375,7 +378,7 @@ async def test_a_book_command_card_gets_its_cover(bot, filled_in, goodreads_page
     [card] = reply.embeds
     assert (card.url, card.thumbnail.url) == (hardcover_book_url(1), COVER)
     assert "1 book without a cover or blurb, in 1 reply" in told
-    assert f"**Updated 1 reply:**\n- Dune: {reply.jump_url}" in told
+    assert f"**Updated 1 reply:**\n- Dune (#general in **RfM**): {reply.jump_url}" in told
     if not restarted:
         # "Wrong book?" switching back to Dune would make its card again from this.
         assert bot.replies[reply.id].cards[0].book.cover_url == COVER
@@ -408,3 +411,55 @@ async def test_a_book_command_that_found_nothing_is_left_as_it_is(bot, added):
     added()
 
     assert (await retry(bot, place)).startswith("Nothing to retry")
+
+
+@pytest.mark.parametrize("restarted", [False, True])
+async def test_a_dry_run_changes_nothing(bot, added, filled_in, goodreads_pages, restarted):
+    message = FakeMessage("{dune} and {nothing}")
+    await bot.on_message(message)
+    place = FakeMessage("", id=600)
+    place.channel.id = 21
+    await bot.handle_command(server_command(place), "circe")
+    await settled(bot)
+    [reply], [command_reply] = message.replies, place.replies
+    if restarted:
+        restart(bot)
+    added()
+    filled_in(DUNE)
+    filled_in(CIRCE)
+    before = [embed.to_dict() for embed in [*reply.embeds, *command_reply.embeds]]
+
+    told = await retry(bot, message, place, dry_run=True)
+    assert told.startswith("Dry run: nothing was changed.\nLooked again for")
+    assert "**Would update 2 replies:**" in told
+    assert f"- Piranesi, Dune (#general in **RfM**): {reply.jump_url}" in told
+    assert f"- Circe (#general in **RfM**): {command_reply.jump_url}" in told
+    assert reply.edits == 0 and command_reply.edits == 0
+    # Nor the cards kept in memory, which a later edit would send.
+    after = [embed.to_dict() for embed in [*reply.embeds, *command_reply.embeds]]
+    assert after == before
+    assert logged(bot) == [("dune", 1), ("nothing", None), ("circe", 3)]
+
+    told = await retry(bot, message, place)
+    assert "**Updated 2 replies:**" in told
+    assert reply.titles() == ["Dune", "Piranesi"]
+    assert command_reply.embeds[0].thumbnail.url == COVER
+
+
+async def test_a_reply_out_of_reach_says_what_permission_is_missing(bot, filled_in):
+    message = FakeMessage("{dune}")
+    await bot.on_message(message)
+    restart(bot)
+    filled_in(DUNE)
+
+    async def fetch_message(message_id):
+        raise discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "no")
+
+    message.channel.fetch_message = fetch_message
+    message.channel.guild = SimpleNamespace(name="RfM", me=SimpleNamespace())
+    message.channel.permissions_for = lambda member: SimpleNamespace(
+        view_channel=True, read_message_history=False
+    )
+    told = await retry(bot, message, dry_run=True)
+    assert "**Would leave 1 reply alone**" in told
+    assert "- The bot lacks Read Message History in #general in **RfM**" in told

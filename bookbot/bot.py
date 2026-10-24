@@ -517,7 +517,8 @@ def _stats_line(key: str, row: dict) -> str:
         )
     if key == "servers":
         return (
-            f"• **{text(row['guild_name'])}**: {_count(row['mentions'], 'lookup', 'lookups')}, "
+            f"• **{text(row['guild_name'])}**: {_count(row['mentions'], 'lookup', 'lookups')}"
+            f" ({row['braces']} {{…}}, {row['slash_book']} /book), "
             f"{_count(row['people'], 'person', 'people')}, last {row['last_used'][:10]} "
             f"`{row['guild_id']}`"
         )
@@ -658,12 +659,17 @@ class BookBot(discord.Client):
             name="retry-missed",
             description="Look again for books the bot couldn't find, or found without a cover",
         )
-        @app_commands.describe(hours="How far back to go (24 if left out)")
+        @app_commands.describe(
+            hours="How far back to go (24 if left out)",
+            dry_run="Only say what would be updated, without changing anything",
+        )
         @app_commands.allowed_contexts(guilds=False, dms=True, private_channels=False)
         async def retry_missed(
-            interaction: discord.Interaction, hours: app_commands.Range[int, 1, 8760] = 24
+            interaction: discord.Interaction,
+            hours: app_commands.Range[int, 1, 8760] = 24,
+            dry_run: bool = False,
         ):
-            await self.handle_retry(interaction, hours)
+            await self.handle_retry(interaction, hours, dry_run)
 
         # DM-only and owner-only, like /retry-missed. Options can't repeat in a slash
         # command, so several servers are given separated by commas.
@@ -1314,7 +1320,9 @@ class BookBot(discord.Client):
 
     # --- /retry-missed --------------------------------------------------------------------
 
-    async def handle_retry(self, interaction: discord.Interaction, hours: int) -> None:
+    async def handle_retry(
+        self, interaction: discord.Interaction, hours: int, dry_run: bool = False
+    ) -> None:
         """Search again for what recent messages asked for and didn't get.
 
         For the owner, after adding the missing books to Hardcover: each reply that said
@@ -1323,6 +1331,9 @@ class BookBot(discord.Client):
         links to Hardcover again. That includes /book replies, but a /book that found
         nothing is left as it is: a card put into it would need the asker's ID for its
         buttons, and the log doesn't keep that.
+
+        With `dry_run`, every reply is found as it would be, but nothing is changed, so
+        the owner can check what a real run would do, even in servers they aren't in.
         """
         if interaction.user.id != self._owner_id:
             await interaction.response.send_message(
@@ -1358,7 +1369,7 @@ class BookBot(discord.Client):
                 f"in {_count(len(incomplete_by_message), 'reply', 'replies')}"
             )
         scope = f"{', and '.join(parts)}, from the last {_count(hours, 'hour', 'hours')}"
-        log.info("Retrying %s", scope)
+        log.info("Retrying %s%s", scope, " (dry run)" if dry_run else "")
         if not (by_message or incomplete_by_message):
             await interaction.edit_original_response(content=f"Nothing to retry: {scope}.")
             return
@@ -1383,49 +1394,65 @@ class BookBot(discord.Client):
 
         # The books put into each reply changed, by its link. A reply can be changed both
         # ways, for a book found now and another's cover.
+        # Where each reply is, by name, for a server the owner isn't in.
+        places: dict[str, str] = {}
+        # The channels of the replies left alone, by ID.
+        unreached: set[int] = set()
+
+        def tally(shown, first: Miss | Incomplete) -> None:
+            if shown is None:
+                unreached.add(first.thread_id or first.channel_id)
+                return
+            reply, books = shown
+            updated.setdefault(reply.jump_url, []).extend(books)
+            places[reply.jump_url] = place_text(reply.guild, reply.channel)
+
         updated: dict[str, list[Book]] = {}
         left_alone = 0
         for misses in by_message.values():
             if not any(results[miss.query.casefold()].book for miss in misses):
                 continue
             try:
-                shown = await self._retry_message(misses, results)
+                shown = await self._retry_message(misses, results, dry_run)
             except Exception as error:
                 await self.report_error("retrying a missed query", error)
                 shown = None
-            if shown is None:
-                left_alone += 1
-                continue
-            reply, cards = shown
-            updated.setdefault(reply.jump_url, []).extend(card.book for card in cards)
+            left_alone += shown is None
+            tally(shown and (shown[0], [card.book for card in shown[1]]), misses[0])
         for entries in incomplete_by_message.values():
             if not any(entry.book_id in filled for entry in entries):
                 continue
             try:
-                shown = await self._refresh_message(entries, filled)
+                shown = await self._refresh_message(entries, filled, dry_run)
             except Exception as error:
                 await self.report_error("filling in a cover or blurb", error)
                 shown = None
-            if shown is None:
-                left_alone += 1
-                continue
-            reply, books = shown
-            updated.setdefault(reply.jump_url, []).extend(books)
+            left_alone += shown is None
+            tally(shown, entries[0])
 
-        lines = [f"Looked again for {scope}."]
+        lines = [
+            "Dry run: nothing was changed." if dry_run else "",
+            f"Looked again for {scope}.",
+        ]
         if updated:
-            lines.append(f"**Updated {_count(len(updated), 'reply', 'replies')}:**")
+            done = "Would update" if dry_run else "Updated"
+            lines.append(f"**{done} {_count(len(updated), 'reply', 'replies')}:**")
             lines += [
-                f"- {_titles(books)}: {url}"
+                f"- {_titles(books)} ({places[url]}): {url}"
                 for url, books in list(updated.items())[:RETRIES_LISTED]
             ]
             if len(updated) > RETRIES_LISTED:
                 lines.append(f"- and {len(updated) - RETRIES_LISTED} more")
         if left_alone:
             lines.append(
-                f"**Left {_count(left_alone, 'reply', 'replies')} alone** that could be "
+                f"**{'Would leave' if dry_run else 'Left'}"
+                f" {_count(left_alone, 'reply', 'replies')} alone** that could be "
                 "updated now, because the message or the reply is gone or can't be reached."
             )
+            lines += [
+                f"- The bot lacks {' and '.join(lacking)} in {where}"
+                for where, lacking in self._missing_permissions(unreached)
+            ]
         missing = sorted(
             {
                 miss.query
@@ -1441,7 +1468,7 @@ class BookBot(discord.Client):
         if lacking:
             names = discord.utils.escape_markdown(", ".join(lacking))
             lines.append(f"**Still without a cover or blurb ({len(lacking)}):** {names}")
-        text = "\n".join(lines)
+        text = "\n".join(line for line in lines if line)
         log.info("Retried %s: %d updated, %d left alone", scope, len(updated), left_alone)
         try:
             await interaction.edit_original_response(
@@ -1452,12 +1479,13 @@ class BookBot(discord.Client):
             log.warning("Could not report on the retry: %s", text)
 
     async def _retry_message(
-        self, misses: list[Miss], results: dict[str, LookupResult]
+        self, misses: list[Miss], results: dict[str, LookupResult], dry_run: bool = False
     ) -> tuple[discord.Message, list[Card]] | None:
         """Put the books now found for a message's missed queries into its reply.
 
         Returns the reply and the new cards, or None if nothing was changed: the message
-        or the reply is gone, or the queries have been edited out since.
+        or the reply is gone, or the queries have been edited out since. With `dry_run`,
+        the same, but the reply is left as it is.
         """
         message_id = misses[0].message_id
         async with self._one_at_a_time(message_id):
@@ -1497,6 +1525,8 @@ class BookBot(discord.Client):
             found = [card for card in retried.values() if card.book]
             if not found:
                 return None
+            if dry_run:
+                return sent, found
             if not await self._answer(
                 message, queries, known | retried, logged, sent, embeds, replace_only=True
             ):
@@ -1506,14 +1536,14 @@ class BookBot(discord.Client):
             return self.answered[message_id].message, found
 
     async def _refresh_message(
-        self, entries: list[Incomplete], filled: dict[int, Book]
+        self, entries: list[Incomplete], filled: dict[int, Book], dry_run: bool = False
     ) -> tuple[discord.Message, list[Book]] | None:
         """Fill in the cards of a message's reply whose books now have a cover and blurb.
 
         `filled` has those books, by ID, as Hardcover has them now. Returns the reply and
         the books filled in, or None if nothing was changed: the message or the reply is
         gone, or its cards show other books by now. `entries` are for one message, or for
-        one /book reply.
+        one /book reply. With `dry_run`, the same, but the reply is left as it is.
         """
         first = entries[0]
         async with self._one_at_a_time(first.message_id or first.reply_id or first.mention_id):
@@ -1532,14 +1562,20 @@ class BookBot(discord.Client):
                 # A /book reply can still have "Wrong book?", whose cards these are.
                 live = self.replies.get(sent.id)
                 embeds = live.embeds if live else list(sent.embeds)
-            books: list[Book] = []
-            for embed in embeds:
-                book = filled.get(hardcover_book_id(embed.description or ""))
-                if book:
-                    fill_in_card(embed, book)
-                    books.append(book)
+            # The cards to fill in, with their books. `embeds` may be the live list, which
+            # a dry run must leave alone.
+            to_fill = [
+                (embed, filled[book_id])
+                for embed in embeds
+                if (book_id := hardcover_book_id(embed.description or "")) in filled
+            ]
+            books = [book for _, book in to_fill]
             if not books:
                 return None
+            if dry_run:
+                return sent, books
+            for embed, book in to_fill:
+                fill_in_card(embed, book)
             try:
                 shown = await sent.edit(embeds=embeds)
             except discord.NotFound:
@@ -1591,6 +1627,28 @@ class BookBot(discord.Client):
             except (discord.NotFound, discord.Forbidden):
                 continue
         return None
+
+    def _missing_permissions(self, channel_ids: set[int | None]) -> list[tuple[str, list[str]]]:
+        """Each of these channels where the bot lacks what it needs to reach its replies,
+        by name, with what it lacks. Only channels the bot can still see are checked."""
+        found = []
+        for channel_id in sorted(filter(None, channel_ids)):
+            channel = self.get_channel(channel_id)
+            guild = getattr(channel, "guild", None)
+            if guild is None or guild.me is None:
+                continue
+            allowed = channel.permissions_for(guild.me)
+            lacking = [
+                name
+                for name, ok in (
+                    ("View Channel", allowed.view_channel),
+                    ("Read Message History", allowed.read_message_history),
+                )
+                if not ok
+            ]
+            if lacking:
+                found.append((place_text(guild, channel), lacking))
+        return found
 
     async def _fetch_command_reply(self, entry: Incomplete) -> discord.Message | None:
         """A /book reply, or None if it can't be had any more.

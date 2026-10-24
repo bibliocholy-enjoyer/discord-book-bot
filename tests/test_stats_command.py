@@ -63,6 +63,14 @@ async def test_the_owner_gets_the_report_as_messages(bot, monkeypatch):
     assert "**Not found (most asked first)**\nNone yet." in told
 
 
+async def test_each_server_says_how_it_asks(bot, monkeypatch):
+    await bot.on_message(FakeMessage("{dune} and {circe}"))
+    command = Origin(**{**ORIGIN.__dict__, "source": "command"})
+    await bot.usage.record(command, [("circe", CIRCE)], None)
+    told = await run_stats(bot, monkeypatch)
+    assert "• **RfM**: 3 lookups (2 {…}, 1 /book), 1 person, last " in told
+
+
 async def test_the_owners_books_are_left_out_unless_asked_for(bot, monkeypatch):
     await bot.on_message(FakeMessage("{dune}"))
     owner = Origin(**{**ORIGIN.__dict__, "user_id": OWNER})
