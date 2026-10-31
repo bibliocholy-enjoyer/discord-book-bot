@@ -461,11 +461,17 @@ def _titles(books: list[Book]) -> str:
 
 
 def _with_cover_and_blurb(book: Book, filled: dict[int, Book]) -> Book:
-    """`book`, with the cover and blurb from `filled` if it is there."""
+    """`book`, with the cover, blurb, year and page count from `filled` if it is there."""
     now = filled.get(book.id)
     if now is None:
         return book
-    return replace(book, cover_url=now.cover_url, description=now.description)
+    return replace(
+        book,
+        cover_url=now.cover_url,
+        description=now.description,
+        release_year=now.release_year or book.release_year,
+        pages=now.pages or book.pages,
+    )
 
 
 def missing_text(query: str, where: str, retryable: bool) -> str:

@@ -461,3 +461,22 @@ async def test_a_reply_out_of_reach_says_what_permission_is_missing(bot, filled_
     told = await retry(bot, message, dry_run=True)
     assert "**Would leave 1 reply alone**" in told
     assert "- The bot lacks Read Message History in #general in **RfM**" in told
+
+
+async def test_a_card_gets_the_year_and_pages_filled_in_with_its_cover(
+    bot, monkeypatch, goodreads_pages
+):
+    message = FakeMessage("{dune}")
+    await bot.on_message(message)
+    [reply] = message.replies
+    assert "pages" not in reply.embeds[0].description
+    now = Book(
+        id=1, title="Dune", description="Blurb.", cover_url=COVER, release_year=1965, pages=412
+    )
+    monkeypatch.setitem(NOW, 1, now)
+
+    await retry(bot, message)
+    [card] = reply.embeds
+    assert card.description.split("\n")[0] == "Published 1965 · 412 pages"
+    assert card.description.count("Published") == 1
+    assert bot.answered[message.id].cards[0].book.pages == 412
