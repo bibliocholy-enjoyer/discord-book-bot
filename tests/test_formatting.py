@@ -50,7 +50,7 @@ def test_full_embed():
     assert embed.title == "**Iron Flame** by Rebecca Yarros"
     assert embed.url == LINKS.hardcover
     assert embed.description.split("\n") == [
-        "Published 2023 · 640 pages",
+        "2023 · 640 pages",
         "*The Empyrean #2* · Fantasy, Romance",
         f"[Hardcover]({LINKS.hardcover}) · [Goodreads]({LINKS.goodreads})"
         f" · [Amazon]({LINKS.amazon})",
@@ -83,8 +83,8 @@ def test_sparse_embed_has_title_and_links():
 @pytest.mark.parametrize(
     ("facts", "expected"),
     [
-        ({"release_year": 2024, "pages": 312}, "Published 2024 · 312 pages"),
-        ({"release_year": 2024}, "Published 2024"),
+        ({"release_year": 2024, "pages": 312}, "2024 · 312 pages"),
+        ({"release_year": 2024}, "2024"),
         ({"pages": 312}, "312 pages"),
     ],
 )
@@ -127,10 +127,12 @@ def test_alternative_label():
 @pytest.mark.parametrize(
     ("before", "after"),
     [
-        ("[Hardcover](h)", "Published 1965 · 412 pages\n[Hardcover](h)"),
-        ("Published 2020\n[Hardcover](h)", "Published 1965 · 412 pages\n[Hardcover](h)"),
-        ("412 pages\n*Dune #1*", "Published 1965 · 412 pages\n*Dune #1*"),
-        ("", "Published 1965 · 412 pages"),
+        ("[Hardcover](h)", "1965 · 412 pages\n[Hardcover](h)"),
+        ("Published 2020\n[Hardcover](h)", "1965 · 412 pages\n[Hardcover](h)"),
+        ("2020 · 300 pages\n[Hardcover](h)", "1965 · 412 pages\n[Hardcover](h)"),
+        ("2020\n[Hardcover](h)", "1965 · 412 pages\n[Hardcover](h)"),
+        ("412 pages\n*Dune #1*", "1965 · 412 pages\n*Dune #1*"),
+        ("", "1965 · 412 pages"),
     ],
 )
 def test_filling_in_a_card_puts_in_or_replaces_the_year_and_pages(before, after):
