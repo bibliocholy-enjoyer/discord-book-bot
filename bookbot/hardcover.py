@@ -50,7 +50,7 @@ query ExternalIds($book_id: Int!) {
 
 _COVERS_AND_BLURBS = """
 query CoversAndBlurbs($ids: [Int!]!) {
-  books(where: {id: {_in: $ids}}) { id title description image { url } }
+  books(where: {id: {_in: $ids}}) { id title description release_year pages image { url } }
 }
 """
 
@@ -178,7 +178,8 @@ class HardcoverClient:
         return editions, goodreads_ids
 
     async def covers_and_blurbs(self, book_ids: list[int]) -> dict[int, Book]:
-        """These books as Hardcover has them now, with only the title, cover and blurb.
+        """These books as Hardcover has them now, with only the title, cover, blurb, year
+        and page count.
 
         Search results can lag behind edits on Hardcover, so this asks for the books
         themselves.
@@ -189,6 +190,8 @@ class HardcoverClient:
                 id=b["id"],
                 title=b.get("title") or "Untitled",
                 description=b.get("description"),
+                release_year=b.get("release_year"),
+                pages=b.get("pages"),
                 cover_url=(b.get("image") or {}).get("url"),
             )
             for b in data.get("books") or []

@@ -1,9 +1,11 @@
+import discord
 import pytest
 
 from bookbot.formatting import (
     CARD_COLORS,
     alternative_label,
     book_embed,
+    fill_in_card,
     format_position,
     not_found_line,
     truncate,
@@ -120,3 +122,19 @@ def test_alternative_label():
     book = Book(id=1, title="Dune", authors=[Author(id=1, name="Frank Herbert")], release_year=1965)
     assert alternative_label(book) == "Dune — Frank Herbert (1965)"
     assert len(alternative_label(Book(id=1, title="x" * 300))) <= 100
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("[Hardcover](h)", "Published 1965 · 412 pages\n[Hardcover](h)"),
+        ("Published 2020\n[Hardcover](h)", "Published 1965 · 412 pages\n[Hardcover](h)"),
+        ("412 pages\n*Dune #1*", "Published 1965 · 412 pages\n*Dune #1*"),
+        ("", "Published 1965 · 412 pages"),
+    ],
+)
+def test_filling_in_a_card_puts_in_or_replaces_the_year_and_pages(before, after):
+    embed = discord.Embed(title="Dune", description=before)
+    book = Book(id=1, title="Dune", cover_url="https://c", release_year=1965, pages=412)
+    fill_in_card(embed, book)
+    assert embed.description == after

@@ -61,6 +61,8 @@ anything can be missing for an obscure book, so check before using it (`if book.
 or the card will say "None".
 """
 
+import re
+
 import discord
 
 from .hardcover import Book
@@ -172,11 +174,25 @@ def fill_in_card(embed: discord.Embed, book: Book) -> None:
     """Change a card made when Hardcover lacked the cover or blurb, now that it has both.
 
     Of everything on the card, those two only decide the cover and where the title links
-    (see title_url in links.py), so the rest is left as it is. A change to book_embed
-    that shows the blurb, or anything else that comes with it, needs one here too.
+    (see title_url in links.py). Whoever fills them in often adds the year and page count
+    too, so the facts line is put in or replaced as well; the rest is left as it is. A
+    change to book_embed that shows the blurb, or anything else that comes with it, needs
+    one here too.
     """
     embed.url = hardcover_book_url(book.id)
     embed.set_thumbnail(url=book.cover_url)
+    facts = facts_text(book)
+    if facts:
+        lines = (embed.description or "").split("\n")
+        if _FACTS_LINE.fullmatch(lines[0]):
+            lines[0] = facts
+        else:
+            lines.insert(0, facts)
+        embed.description = "\n".join(line for line in lines if line)
+
+
+# What facts_text makes, to find it on a card already sent.
+_FACTS_LINE = re.compile(r"Published \d+( · \d+ pages)?|\d+ pages")
 
 
 def authors_text(book: Book) -> str:
