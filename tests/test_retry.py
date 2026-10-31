@@ -477,6 +477,6 @@ async def test_a_card_gets_the_year_and_pages_filled_in_with_its_cover(
 
     await retry(bot, message)
     [card] = reply.embeds
-    assert card.description.split("\n")[0] == "Published 1965 · 412 pages"
-    assert card.description.count("Published") == 1
+    assert card.description.split("\n")[0] == "1965 · 412 pages"
+    assert card.description.count("1965") == 1
     assert bot.answered[message.id].cards[0].book.pages == 412

@@ -24,7 +24,7 @@ doing their job, not a sign you did something wrong. Run them with:
 
 Each failure shows the text the code produced next to the text the test expected. If the
 produced text is what you meant, open tests/test_formatting.py and change the expected
-text to match. If it isn't (say it reads "Published None"), the test has caught a bug in
+text to match. If it isn't (say it reads "None · 640 pages"), the test has caught a bug in
 your change, so fix the code instead. Then run the tests again until they pass.
 
 Discord's formatting
@@ -104,7 +104,7 @@ def book_embed(book: Book, links: Links, position: int = 0) -> discord.Embed:
     """The card for one book. Kept short so it doesn't fill a phone screen:
 
         **Iron Flame** by Rebecca Yarros
-        Published 2023 · 640 pages
+        2023 · 640 pages
         *The Empyrean #2* · Fantasy, Romance
         Hardcover · Goodreads · Amazon
 
@@ -191,8 +191,9 @@ def fill_in_card(embed: discord.Embed, book: Book) -> None:
         embed.description = "\n".join(line for line in lines if line)
 
 
-# What facts_text makes, to find it on a card already sent.
-_FACTS_LINE = re.compile(r"Published \d+( · \d+ pages)?|\d+ pages")
+# What facts_text makes, to find it on a card already sent. Cards sent before the year
+# lost its "Published" label still have it, so that form is matched too.
+_FACTS_LINE = re.compile(r"(Published )?\d{1,4}( · \d+ pages)?|\d+ pages")
 
 
 def authors_text(book: Book) -> str:
@@ -222,10 +223,10 @@ def genres_text(book: Book) -> str:
 
 
 def facts_text(book: Book) -> str:
-    """The year and length, whichever are known: "Published 2023 · 640 pages"."""
+    """The year and length, whichever are known: "2023 · 640 pages"."""
     facts = []
     if book.release_year:
-        facts.append(f"Published {book.release_year}")
+        facts.append(str(book.release_year))
     if book.pages:
         facts.append(f"{book.pages} pages")
     return " · ".join(facts)
