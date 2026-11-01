@@ -104,13 +104,8 @@ def book_embed(book: Book, links: Links, position: int = 0) -> discord.Embed:
     """The card for one book. Kept short so it doesn't fill a phone screen:
 
         **Iron Flame** by Rebecca Yarros
-        2023 · 640 pages
-        *The Empyrean #2* · Fantasy, Romance
-        Hardcover · Goodreads · Amazon
-
-    or, for a book that isn't in a series, with the genres on the year's line instead:
-
-        2023 · 316 pages · Fantasy
+        2023 · 640 pages · Fantasy, Romance
+        *The Empyrean #2*
         Hardcover · Goodreads · Amazon
 
     with the cover as a small picture on the right. ("Embed" is Discord's name for a card
@@ -140,17 +135,11 @@ def book_embed(book: Book, links: Links, position: int = 0) -> discord.Embed:
     if authors and len(f"{title_line} by {authors}") <= 256:
         title_line += f" by {authors}"
 
-    # Line 2: the year and page count, whichever are known.
-    #
-    # Line 3: series and genres, with a dot between them when the book has both. A book
-    # that isn't in a series has its genres put on line 2 instead, saving a line; with a
-    # series, all four together would be too long for a phone.
-    if series:
-        facts_line = facts
-        details_line = " · ".join(piece for piece in [series, genres] if piece)
-    else:
-        facts_line = " · ".join(piece for piece in [facts, genres] if piece)
-        details_line = ""
+    # Line 2: the year, page count and genres, whichever are known.
+    facts_line = " · ".join(piece for piece in [facts, genres] if piece)
+
+    # Line 3: the series, on its own since series names tend to be long.
+    series_line = series
 
     # Line 4: where to find the book.
     links_line = (
@@ -163,8 +152,8 @@ def book_embed(book: Book, links: Links, position: int = 0) -> discord.Embed:
     #
     #     rating_line = f"★ {book.rating:.2f}" if book.rating else ""
     #
-    # and then: lines = [facts_line, details_line, links_line, rating_line]
-    lines = [facts_line, details_line, links_line]
+    # and then: lines = [facts_line, series_line, links_line, rating_line]
+    lines = [facts_line, series_line, links_line]
 
     # Join the lines, skipping any that came out empty so the card has no blank gaps.
     text = "\n".join(line for line in lines if line)

@@ -50,8 +50,8 @@ def test_full_embed():
     assert embed.title == "**Iron Flame** by Rebecca Yarros"
     assert embed.url == LINKS.hardcover
     assert embed.description.split("\n") == [
-        "2023 · 640 pages",
-        "*The Empyrean #2* · Fantasy, Romance",
+        "2023 · 640 pages · Fantasy, Romance",
+        "*The Empyrean #2*",
         f"[Hardcover]({LINKS.hardcover}) · [Goodreads]({LINKS.goodreads})"
         f" · [Amazon]({LINKS.amazon})",
     ]
@@ -88,7 +88,7 @@ def test_sparse_embed_has_title_and_links():
         ({"pages": 312}, "312 pages · Fantasy"),
     ],
 )
-def test_without_a_series_genres_share_the_line_under_the_title(facts, expected):
+def test_genres_share_the_line_under_the_title(facts, expected):
     embed = book_embed(Book(id=7, title="Solo", genres=["Fantasy"], **facts), LINKS)
     assert embed.description.split("\n") == [
         expected,
