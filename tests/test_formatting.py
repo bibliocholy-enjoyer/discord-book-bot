@@ -50,8 +50,8 @@ def test_full_embed():
     assert embed.title == "**Iron Flame** by Rebecca Yarros"
     assert embed.url == LINKS.hardcover
     assert embed.description.split("\n") == [
-        "2023 · 640 pages",
-        "*The Empyrean #2* · Fantasy, Romance",
+        "2023 · 640 pages · Fantasy, Romance",
+        "*The Empyrean #2*",
         f"[Hardcover]({LINKS.hardcover}) · [Goodreads]({LINKS.goodreads})"
         f" · [Amazon]({LINKS.amazon})",
     ]
@@ -83,14 +83,18 @@ def test_sparse_embed_has_title_and_links():
 @pytest.mark.parametrize(
     ("facts", "expected"),
     [
-        ({"release_year": 2024, "pages": 312}, "2024 · 312 pages"),
-        ({"release_year": 2024}, "2024"),
-        ({"pages": 312}, "312 pages"),
+        ({"release_year": 2024, "pages": 312}, "2024 · 312 pages · Fantasy"),
+        ({"release_year": 2024}, "2024 · Fantasy"),
+        ({"pages": 312}, "312 pages · Fantasy"),
     ],
 )
-def test_year_and_pages_get_the_line_under_the_title(facts, expected):
+def test_genres_share_the_line_under_the_title(facts, expected):
     embed = book_embed(Book(id=7, title="Solo", genres=["Fantasy"], **facts), LINKS)
-    assert embed.description.split("\n")[:2] == [expected, "Fantasy"]
+    assert embed.description.split("\n") == [
+        expected,
+        f"[Hardcover]({LINKS.hardcover}) · [Goodreads]({LINKS.goodreads})"
+        f" · [Amazon]({LINKS.amazon})",
+    ]
 
 
 def test_a_very_long_title_fits_the_title_field():
@@ -133,6 +137,14 @@ def test_alternative_label():
         ("2020\n[Hardcover](h)", "1965 · 412 pages\n[Hardcover](h)"),
         ("412 pages\n*Dune #1*", "1965 · 412 pages\n*Dune #1*"),
         ("", "1965 · 412 pages"),
+        (
+            "2020 · 300 pages · Fantasy\n[Hardcover](h)",
+            "1965 · 412 pages · Fantasy\n[Hardcover](h)",
+        ),
+        ("2020 · Fantasy, Romance", "1965 · 412 pages · Fantasy, Romance"),
+        ("Fantasy\n[Hardcover](h)", "1965 · 412 pages · Fantasy\n[Hardcover](h)"),
+        ("2020 · 300 pages\nFantasy\n[Hardcover](h)", "1965 · 412 pages\nFantasy\n[Hardcover](h)"),
+        ("*Dune #1* · Fantasy", "1965 · 412 pages\n*Dune #1* · Fantasy"),
     ],
 )
 def test_filling_in_a_card_puts_in_or_replaces_the_year_and_pages(before, after):
