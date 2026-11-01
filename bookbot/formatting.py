@@ -108,6 +108,11 @@ def book_embed(book: Book, links: Links, position: int = 0) -> discord.Embed:
         *The Empyrean #2* · Fantasy, Romance
         Hardcover · Goodreads · Amazon
 
+    or, for a book that isn't in a series, with the genres on the year's line instead:
+
+        2023 · 316 pages · Fantasy
+        Hardcover · Goodreads · Amazon
+
     with the cover as a small picture on the right. ("Embed" is Discord's name for a card
     like this.) `position` picks the stripe's color: 0 is the first of CARD_COLORS, 1 the
     second, and so on, starting over after the last.
@@ -136,10 +141,16 @@ def book_embed(book: Book, links: Links, position: int = 0) -> discord.Embed:
         title_line += f" by {authors}"
 
     # Line 2: the year and page count, whichever are known.
-    facts_line = facts
-
-    # Line 3: series and genres, with a dot between them when the book has both.
-    details_line = " · ".join(piece for piece in [series, genres] if piece)
+    #
+    # Line 3: series and genres, with a dot between them when the book has both. A book
+    # that isn't in a series has its genres put on line 2 instead, saving a line; with a
+    # series, all four together would be too long for a phone.
+    if series:
+        facts_line = facts
+        details_line = " · ".join(piece for piece in [series, genres] if piece)
+    else:
+        facts_line = " · ".join(piece for piece in [facts, genres] if piece)
+        details_line = ""
 
     # Line 4: where to find the book.
     links_line = (
@@ -184,16 +195,24 @@ def fill_in_card(embed: discord.Embed, book: Book) -> None:
     facts = facts_text(book)
     if facts:
         lines = (embed.description or "").split("\n")
-        if _FACTS_LINE.fullmatch(lines[0]):
-            lines[0] = facts
+        found = _FACTS_LINE.fullmatch(lines[0])
+        if found:
+            # Keep any genres that follow the old year and page count.
+            lines[0] = " · ".join(piece for piece in [facts, found["genres"]] if piece)
+        elif lines[0] and not lines[0].startswith(("*", "[")):
+            # A line of genres alone (not the series, which is in italics, or the links).
+            lines[0] = f"{facts} · {lines[0]}"
         else:
             lines.insert(0, facts)
         embed.description = "\n".join(line for line in lines if line)
 
 
-# What facts_text makes, to find it on a card already sent. Cards sent before the year
-# lost its "Published" label still have it, so that form is matched too.
-_FACTS_LINE = re.compile(r"(Published )?\d{1,4}( · \d+ pages)?|\d+ pages")
+# What facts_text makes, to find it on a card already sent, along with any genres after
+# it. Cards sent before the year lost its "Published" label still have it, so that form is
+# matched too.
+_FACTS_LINE = re.compile(
+    r"(?:(?:Published )?\d{1,4}(?: · \d+ pages)?|\d+ pages)(?: · (?P<genres>.+))?"
+)
 
 
 def authors_text(book: Book) -> str:
