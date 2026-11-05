@@ -135,6 +135,16 @@ class Reply:
     message: discord.Message | None = None
 
 
+def log_deleted(reply: discord.Message, by: str) -> None:
+    """Note in the logs that a reply was deleted, and which books it showed.
+
+    Nothing else records this, so without it a reply that someone removed can't be told
+    apart from one that was never sent. Who deleted it is described, not identified.
+    """
+    titles = ", ".join(embed.title or "?" for embed in reply.embeds) or "no cards"
+    log.info("Reply %s deleted by %s; it showed: %s", reply.jump_url, by, titles)
+
+
 class DeleteButton(
     discord.ui.DynamicItem[discord.ui.Button], template=r"bookbot:delete:(?P<user_id>\d+)"
 ):
@@ -183,6 +193,7 @@ class DeleteButton(
             return
         interaction.client.replies.pop(interaction.message.id, None)
         await interaction.delete_original_response()
+        log_deleted(interaction.message, "the asker")
 
 
 class ConfirmDelete(discord.ui.View):
@@ -204,6 +215,7 @@ class ConfirmDelete(discord.ui.View):
         self.click.client.replies.pop(self.click.message.id, None)
         try:
             await self.click.delete_original_response()
+            log_deleted(self.click.message, "a moderator")
         except discord.NotFound:
             pass  # someone else deleted it first
         await interaction.response.edit_message(content="Deleted.", view=None)
@@ -1208,6 +1220,7 @@ class BookBot(discord.Client):
         self.replies.pop(sent.id, None)
         try:
             await sent.delete()
+            log_deleted(sent, "the bot, as its message was edited to ask for nothing")
         except discord.NotFound:
             pass
 
