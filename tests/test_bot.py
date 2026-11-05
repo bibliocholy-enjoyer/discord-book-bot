@@ -56,7 +56,7 @@ def interaction(bot, user_id, calls, manage_messages=False):
         client=bot,
         user=SimpleNamespace(id=user_id),
         # As for a /book reply: one to a message has a `reference` (see test_edits.py).
-        message=SimpleNamespace(id=MESSAGE_ID, reference=None),
+        message=SimpleNamespace(id=MESSAGE_ID, reference=None, embeds=[], jump_url=""),
         channel=SimpleNamespace(fetch_message=fetch_message),
         permissions=SimpleNamespace(manage_messages=manage_messages),
         response=Recorder(calls),
