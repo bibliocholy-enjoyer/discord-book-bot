@@ -480,3 +480,119 @@ async def test_a_card_gets_the_year_and_pages_filled_in_with_its_cover(
     assert card.description.split("\n")[0] == "1965 · 412 pages"
     assert card.description.count("1965") == 1
     assert bot.answered[message.id].cards[0].book.pages == 412
+
+
+# --- Messages the bot hit an error on ------------------------------------------------------
+
+
+@pytest.fixture
+def outage(bot, monkeypatch):
+    """Hardcover's search is down until the returned function is called."""
+    working = test_edits.botmod.find_book
+    bot.reported = []
+
+    async def report_error(where, error):
+        bot.reported.append(where)
+
+    async def failing(client, query):
+        raise HardcoverError(f"search returned no results object for {query!r}")
+
+    bot.report_error = report_error
+    monkeypatch.setattr(test_edits.botmod, "find_book", failing)
+    return lambda: monkeypatch.setattr(test_edits.botmod, "find_book", working)
+
+
+def failures(bot):
+    return [row[0] for row in bot.usage._db.execute("SELECT message_id FROM failures")]
+
+
+@pytest.mark.parametrize("restarted", [False, True])
+async def test_a_message_that_hit_an_error_is_answered_once_hardcover_is_back(
+    bot, outage, restarted
+):
+    message = FakeMessage("{dune} and {nothing}")
+    await bot.on_message(message)
+    assert message.replies == [] and message.reactions == [bot.error_reaction]
+    assert failures(bot) == [message.id] and logged(bot) == []
+
+    told = await retry(bot, message)
+    assert "1 message that hit an error" in told
+    assert f"Still hitting an error (1):**\n- {message.jump_url}: `" in told
+    assert "HardcoverError: search returned no results object" in told
+    assert message.reactions == [bot.error_reaction] and failures(bot) == [message.id]
+
+    if restarted:
+        restart(bot)
+    outage()
+    told = await retry(bot, message)
+    [reply] = message.replies
+    assert reply.titles() == ["Dune"] and "Couldn't find" in reply.shown["content"]
+    assert "Answered 1 message:**\n- Dune (#general in **RfM**): " + reply.jump_url in told
+    assert "Still hitting" not in told
+    assert message.reactions == [] and failures(bot) == []
+    assert logged(bot) == [("dune", 1), ("nothing", None)]
+
+    # The query that found nothing is now a miss like any other.
+    told = await retry(bot, message)
+    assert "hit an error" not in told and "1 query that found nothing, in 1 reply" in told
+
+
+async def test_editing_the_message_once_hardcover_is_back_clears_the_error(bot, outage):
+    message = FakeMessage("{dune}")
+    await bot.on_message(message)
+    restart(bot)  # the reaction is still on the message, as Discord has it
+    message.reactions = [SimpleNamespace(emoji=bot.error_reaction, me=True)]
+    outage()
+    removed = []
+
+    async def remove_reaction(emoji, member):
+        removed.append(emoji)
+
+    message.remove_reaction = remove_reaction
+    await test_edits.edit(bot, message, "{Dune}")
+    assert message.replies[0].titles() == ["Dune"]
+    assert removed == [bot.error_reaction] and failures(bot) == []
+    assert "hit an error" not in await retry(bot, message)
+
+
+async def test_a_failed_edit_is_put_right_by_the_next_successful_one(bot, outage, monkeypatch):
+    working = test_edits.botmod.find_book  # still failing
+    outage()
+    message = FakeMessage("{nothing}")
+    await bot.on_message(message)
+    monkeypatch.setattr(test_edits.botmod, "find_book", working)
+    await test_edits.edit(bot, message, "{dune}")
+    assert message.reactions == [bot.error_reaction] and failures(bot) == [message.id]
+    assert message.replies[0].shown["content"].startswith("Couldn't find")  # as it was
+
+    outage()
+    await test_edits.edit(bot, message, "{circe}")
+    assert message.replies[0].titles() == ["Circe"]
+    assert message.reactions == [] and failures(bot) == []
+
+
+async def test_a_dry_run_says_which_messages_would_be_answered(bot, outage):
+    message = FakeMessage("{dune} and {circe}")
+    await bot.on_message(message)
+    outage()
+    told = await retry(bot, message, dry_run=True)
+    assert "Would answer 1 message:**\n- dune, circe (#general in **RfM**)" in told
+    assert message.replies == [] and message.reactions == [bot.error_reaction]
+    assert failures(bot) == [message.id] and bot.lookups == []
+
+
+async def test_a_message_deleted_since_it_hit_an_error_is_left_alone(bot, outage):
+    message = FakeMessage("{dune}")
+    await bot.on_message(message)
+    message.deleted = True
+    outage()
+    told = await retry(bot, message)
+    assert "Left 1 reply alone" in told and message.replies == []
+
+
+async def test_errors_from_before_the_hours_asked_for_are_not_retried(bot, outage):
+    message = FakeMessage("{dune}")
+    await bot.on_message(message)
+    bot.usage._db.execute("UPDATE failures SET failed_at = '2020-01-01T00:00:00+00:00'")
+    outage()
+    assert "Nothing to retry" in await retry(bot, message)

@@ -178,6 +178,9 @@ it unset and records nothing). For each book someone asks for, it keeps:
 - a label (positive, negative or neutral) and score for the message, from a small
   word-list sentiment checker. It ignores the `{…}` text itself, and every book in one
   message gets the same score;
+- for a `{…}` message the bot hit an error on, such as Hardcover's search being down:
+  its ID, channel and when, so `/retry-missed` can answer it later. That record goes once
+  the message has its reply;
 - a **hash** of the asker, made with a secret salt (`USAGE_SALT`). The same person always
   gets the same hash, so "how many different people asked about this book" works, but the
   hash can't be turned back into a Discord account without the salt.

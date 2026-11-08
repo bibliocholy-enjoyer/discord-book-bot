@@ -71,6 +71,15 @@ CREATE TABLE IF NOT EXISTS tips_shown (
     PRIMARY KEY (guild_id, user_hash)
 );
 
+-- Messages the bot failed to answer, as when Hardcover's search was down, so that
+-- /retry-missed can answer them later. A row goes once the message is answered.
+CREATE TABLE IF NOT EXISTS failures (
+    message_id INTEGER PRIMARY KEY,
+    failed_at TEXT NOT NULL,             -- UTC, ISO 8601; the latest failure
+    channel_id INTEGER,                  -- a thread is recorded as its parent channel
+    thread_id INTEGER
+);
+
 -- Filled in by hand: a duplicate Hardcover entry, and the one to count it as.
 CREATE TABLE IF NOT EXISTS book_merges (
     book_id INTEGER PRIMARY KEY,
@@ -121,6 +130,15 @@ class Incomplete:
     thread_id: int | None
     reply_id: int | None = None
     mentioned_at: str = ""
+
+
+@dataclass(frozen=True)
+class Failure:
+    """A message the bot hit an error answering, and hasn't answered since."""
+
+    message_id: int
+    channel_id: int | None
+    thread_id: int | None
 
 
 def _now() -> str:
@@ -196,6 +214,18 @@ class UsageLog:
     async def forget(self, mention_ids: list[int]) -> None:
         """The asker edited these queries out of their message."""
         await asyncio.to_thread(self._forget, mention_ids)
+
+    async def failed(self, origin: Origin) -> None:
+        """Answering this message failed; it is to be tried again."""
+        await asyncio.to_thread(self._failed, origin)
+
+    async def failures(self, hours: int) -> list[Failure]:
+        """The messages from the last `hours` that the bot failed to answer."""
+        return await asyncio.to_thread(self._failures, hours)
+
+    async def resolved(self, message_id: int) -> bool:
+        """This message has been answered; whether it was down as a failure."""
+        return await asyncio.to_thread(self._resolved, message_id)
 
     async def claim_tip(self, guild_id: int, user_id: int) -> bool | None:
         """Whether this person should be shown the tip about {…} now, in this server.
@@ -289,6 +319,30 @@ class UsageLog:
                 "UPDATE mentions SET reply_id = ? WHERE id = ?",
                 [(reply_id, mention_id) for mention_id in mention_ids],
             )
+
+    def _failed(self, origin: Origin) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO failures (message_id, failed_at, channel_id, thread_id)"
+                " VALUES (?, ?, ?, ?) ON CONFLICT (message_id) DO UPDATE"
+                " SET failed_at = excluded.failed_at",
+                (origin.message_id, _now(), origin.channel_id, origin.thread_id),
+            )
+
+    def _failures(self, hours: int) -> list[Failure]:
+        since = (datetime.now(UTC) - timedelta(hours=hours)).isoformat(timespec="seconds")
+        with self._lock:
+            found = self._db.execute(
+                "SELECT message_id, channel_id, thread_id FROM failures"
+                " WHERE failed_at >= ? ORDER BY message_id",
+                (since,),
+            ).fetchall()
+        return [Failure(*row) for row in found]
+
+    def _resolved(self, message_id: int) -> bool:
+        with self._lock, self._db:
+            cursor = self._db.execute("DELETE FROM failures WHERE message_id = ?", (message_id,))
+            return cursor.rowcount > 0
 
     def _claim_tip(self, guild_id: int, user_id: int) -> bool | None:
         with self._lock, self._db:

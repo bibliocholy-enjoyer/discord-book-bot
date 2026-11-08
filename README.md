@@ -170,6 +170,9 @@ uv run ruff check . && uv run ruff format --check .
 - A failed lookup gets a reaction on the message that asked, and nothing else in the channel.
   The reaction is ⚠️ unless the application has a custom emoji named `bookbot_error`
   (upload `assets/bookbot_error.png` under Emojis in the developer portal, for each application).
+  The reaction comes off once the message gets its reply: when it is edited and the lookup
+  works this time, or when `/retry-missed` answers it (in servers that have added the bot,
+  with the usage log; see [Filling in books that weren't found](#filling-in-books-that-werent-found)).
 - The bot DMs its owner (the application owner, or `OWNER_ID`) with the error and a link to
   the message, at most once an hour per distinct error. You must share a server with the bot
   to receive DMs.
@@ -198,9 +201,14 @@ It does the same for books that were found but had no cover or no blurb on Hardc
 fill those in there, run `/retry-missed`, and each card for the book gets the cover, with
 its title linking to Hardcover again.
 
+And it answers the `{…}` messages that hit an error, as when Hardcover's search was down
+for a while: each gets the reply it should have had, and loses the error reaction. If
+looking one up fails again, the answer says so, with the error, and the next run tries
+again.
+
 Only you can see its answer, which says how many queries, books and replies it went
 over, links to the replies it updated (naming the channel and server, for servers you
-aren't in), and lists what is still missing. If a reply couldn't be reached because the
+aren't in), and lists what is still missing or still failing. If a reply couldn't be reached because the
 bot lacks a permission in its channel, the answer says which.
 
 To check first, run `/retry-missed dry_run:True`: it finds every reply it would update

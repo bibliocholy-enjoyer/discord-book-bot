@@ -36,7 +36,7 @@ from .lookup import LookupResult, find_book
 from .parsing import MAX_QUERIES_PER_MESSAGE, extract_queries
 from .sentiment import score_message
 from .stats import OWNER_CHOICES, Report, Section, gather
-from .usage import Incomplete, Miss, Origin, UsageLog, hash_user
+from .usage import Failure, Incomplete, Miss, Origin, UsageLog, hash_user
 
 log = logging.getLogger(__name__)
 
@@ -687,6 +687,9 @@ class BookBot(discord.Client):
         # Servers known to have used {…}, which get no tip about it (see _wants_tip).
         self._braces_servers: set[int] = set()
         self.error_reaction: discord.Emoji | str = ERROR_REACTION
+        # Messages given the error reaction since the bot started. The usage log keeps
+        # those in servers that have added the bot, through restarts (see _failed).
+        self._flagged: set[int] = set()
         self.replies: dict[int, Reply] = {}  # by the ID of the bot's reply message
         self.answered: dict[int, Answered] = {}  # by the ID of the message replied to
         # For each message being handled right now: a lock, and how many are using it.
@@ -1082,6 +1085,8 @@ class BookBot(discord.Client):
                 await self._answer(message, queries)
             except Exception as error:
                 await self._failed(message, f"this message: {message.jump_url}", error)
+            else:
+                await self._cleared(message)
 
     async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
         # As in on_message, ordinary chat never gets past these checks. The lock is
@@ -1096,9 +1101,12 @@ class BookBot(discord.Client):
 
         async with self._one_at_a_time(message.id):
             try:
-                await self._answer_edit(message, queries)
+                in_line = await self._answer_edit(message, queries)
             except Exception as error:
                 await self._failed(message, f"an edit to this message: {message.jump_url}", error)
+            else:
+                if in_line:
+                    await self._cleared(message)
 
     @contextlib.asynccontextmanager
     async def _one_at_a_time(self, message_id: int):
@@ -1120,11 +1128,44 @@ class BookBot(discord.Client):
                 self._locks[message_id] = (lock, users - 1)
 
     async def _failed(self, message: discord.Message, where: str, error: Exception) -> None:
+        """Flag a message the bot couldn't answer, and note it for /retry-missed."""
         try:
             await message.add_reaction(self.error_reaction)
+            self._flagged.add(message.id)
         except discord.HTTPException:
             pass
+        origin = message_origin(message)
+        if self.usage and origin:
+            try:
+                await self.usage.failed(origin)
+            except Exception as log_error:
+                log.exception("Could not note the failure in the usage log", exc_info=log_error)
         await self.report_error(where, error)
+
+    async def _cleared(self, message: discord.Message) -> None:
+        """Take the error reaction off a message whose reply is now as it should be.
+
+        Never raises: the reply has been sent, and a reaction left behind is no reason to
+        flag the message again.
+        """
+        flagged = message.id in self._flagged
+        self._flagged.discard(message.id)
+        if self.usage and message.guild:
+            try:
+                flagged = await self.usage.resolved(message.id) or flagged
+            except Exception:
+                log.exception("Could not clear a failure from the usage log")
+        # From before the bot restarted, or before failures were logged.
+        flagged = flagged or any(
+            getattr(reaction, "me", False) and str(reaction.emoji) == str(self.error_reaction)
+            for reaction in message.reactions
+        )
+        if not flagged:
+            return
+        try:
+            await message.remove_reaction(self.error_reaction, self.user)
+        except discord.HTTPException as error:
+            log.warning("Could not remove the error reaction from %s: %s", message.jump_url, error)
 
     async def report_gaps(
         self, cards: list[Card], where: str, books_retryable: bool, covers_retryable: bool
@@ -1193,21 +1234,27 @@ class BookBot(discord.Client):
             del self.answered[next(iter(self.answered))]
         return True
 
-    async def _answer_edit(self, message: discord.Message, queries: list[str]) -> None:
-        """Bring the reply to an edited message in line with the queries it has now."""
+    async def _answer_edit(
+        self, message: discord.Message, queries: list[str], force: bool = False
+    ) -> bool:
+        """Bring the reply to an edited message in line with the queries it has now.
+
+        Returns False if the message was left alone, as one that only looks edited. With
+        `force`, as when /retry-missed answers a message that failed, it never is.
+        """
         wanted = [query.casefold() for query in queries]
         answered = self.answered.get(message.id)
         if answered:
             known = {card.query.casefold(): card for card in answered.cards}
             if wanted == list(known):
-                return  # the edit didn't touch the queries, or wasn't really an edit
+                return True  # the edit didn't touch the queries, or wasn't really an edit
             logged = {key: card.mention_id for key, card in known.items() if card.mention_id}
             sent, embeds = answered.message, answered.embeds
         else:
             # Either the message had no queries until now, or the bot has forgotten its
             # reply (see REMEMBERED_MESSAGES). The channel and the usage log say which.
-            if not queries or not _just_edited(message):
-                return
+            if not force and (not queries or not _just_edited(message)):
+                return False
             known, embeds = {}, None
             logged = await self.logged_mentions(message)
             sent = await self._find_reply(message)
@@ -1215,14 +1262,17 @@ class BookBot(discord.Client):
         await self.forget_usage([id for key, id in logged.items() if key not in wanted])
         if queries:
             await self._answer(message, queries, known, logged, sent, embeds)
-            return
-        del self.answered[message.id]
+            return True
+        self.answered.pop(message.id, None)
+        if sent is None:
+            return True
         self.replies.pop(sent.id, None)
         try:
             await sent.delete()
             log_deleted(sent, "the bot, as its message was edited to ask for nothing")
         except discord.NotFound:
             pass
+        return True
 
     async def _find_reply(self, message: discord.Message) -> discord.Message | None:
         """Look through the channel for the bot's reply to a message."""
@@ -1433,6 +1483,9 @@ class BookBot(discord.Client):
         nothing is left as it is: a card put into it would need the asker's ID for its
         buttons, and the log doesn't keep that.
 
+        It also answers the messages the bot hit an error on, as when Hardcover's search
+        was down, and takes the error reaction off them.
+
         With `dry_run`, every reply is found as it would be, but nothing is changed, so
         the owner can check what a real run would do, even in servers they aren't in.
         """
@@ -1448,6 +1501,7 @@ class BookBot(discord.Client):
             )
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
+        failures = await self.usage.failures(hours)
         by_message: dict[int, list[Miss]] = {}
         for miss in await self.usage.misses(hours):
             by_message.setdefault(miss.message_id, []).append(miss)
@@ -1459,7 +1513,9 @@ class BookBot(discord.Client):
         total = sum(len(misses) for misses in by_message.values())
         incomplete = sum(len(entries) for entries in incomplete_by_message.values())
         parts = []
-        if by_message or not incomplete_by_message:
+        if failures:
+            parts.append(f"{_count(len(failures), 'message', 'messages')} that hit an error")
+        if by_message or not (incomplete_by_message or failures):
             parts.append(
                 f"{_count(total, 'query', 'queries')} that found nothing, "
                 f"in {_count(len(by_message), 'reply', 'replies')}"
@@ -1471,10 +1527,39 @@ class BookBot(discord.Client):
             )
         scope = f"{', and '.join(parts)}, from the last {_count(hours, 'hour', 'hours')}"
         log.info("Retrying %s%s", scope, " (dry run)" if dry_run else "")
-        if not (by_message or incomplete_by_message):
+        if not (failures or by_message or incomplete_by_message):
             await interaction.edit_original_response(content=f"Nothing to retry: {scope}.")
             return
         await interaction.edit_original_response(content=f"Looking again for {scope}…")
+
+        # The messages that hit an error come first: if Hardcover is still down, the rest
+        # would fail as well, and the answer should say so.
+        answered_lines: list[str] = []
+        failing_lines: list[str] = []
+        left_alone = 0
+        unreached: set[int] = set()  # the channels of the replies left alone, by ID
+        for failure in failures:
+            try:
+                outcome = await self._retry_failure(failure, dry_run)
+            except Exception as error:
+                await self.report_error("retrying a message that hit an error", error)
+                outcome = None
+            if outcome is None:
+                left_alone += 1
+                unreached.add(failure.thread_id or failure.channel_id)
+                continue
+            message, shown = outcome
+            place = place_text(message.guild, message.channel)
+            if isinstance(shown, Exception):
+                details = "".join(traceback.format_exception_only(shown)).strip()
+                failing_lines.append(f"- {message.jump_url}: `{details[:150]}`")
+            elif dry_run:
+                queries = discord.utils.escape_markdown(", ".join(shown))
+                answered_lines.append(f"- {queries} ({place}): {message.jump_url}")
+            else:
+                reply, books = shown
+                titles = _titles(books) if books else "nothing found"
+                answered_lines.append(f"- {titles} ({place}): {reply.jump_url}")
 
         # Hardcover is asked first, and once per distinct query or book. Discord only
         # comes into it for a message that has something new to show.
@@ -1497,8 +1582,6 @@ class BookBot(discord.Client):
         # ways, for a book found now and another's cover.
         # Where each reply is, by name, for a server the owner isn't in.
         places: dict[str, str] = {}
-        # The channels of the replies left alone, by ID.
-        unreached: set[int] = set()
 
         def tally(shown, first: Miss | Incomplete) -> None:
             if shown is None:
@@ -1509,7 +1592,6 @@ class BookBot(discord.Client):
             places[reply.jump_url] = place_text(reply.guild, reply.channel)
 
         updated: dict[str, list[Book]] = {}
-        left_alone = 0
         for misses in by_message.values():
             if not any(results[miss.query.casefold()].book for miss in misses):
                 continue
@@ -1535,6 +1617,17 @@ class BookBot(discord.Client):
             "Dry run: nothing was changed." if dry_run else "",
             f"Looked again for {scope}.",
         ]
+        if answered_lines:
+            done = "Would answer" if dry_run else "Answered"
+            lines.append(f"**{done} {_count(len(answered_lines), 'message', 'messages')}:**")
+            lines += answered_lines[:RETRIES_LISTED]
+            if len(answered_lines) > RETRIES_LISTED:
+                lines.append(f"- and {len(answered_lines) - RETRIES_LISTED} more")
+        if failing_lines:
+            lines.append(f"**Still hitting an error ({len(failing_lines)}):**")
+            lines += failing_lines[:RETRIES_LISTED]
+            if len(failing_lines) > RETRIES_LISTED:
+                lines.append(f"- and {len(failing_lines) - RETRIES_LISTED} more")
         if updated:
             done = "Would update" if dry_run else "Updated"
             lines.append(f"**{done} {_count(len(updated), 'reply', 'replies')}:**")
@@ -1570,7 +1663,13 @@ class BookBot(discord.Client):
             names = discord.utils.escape_markdown(", ".join(lacking))
             lines.append(f"**Still without a cover or blurb ({len(lacking)}):** {names}")
         text = "\n".join(line for line in lines if line)
-        log.info("Retried %s: %d updated, %d left alone", scope, len(updated), left_alone)
+        log.info(
+            "Retried %s: %d answered, %d updated, %d left alone",
+            scope,
+            len(answered_lines),
+            len(updated),
+            left_alone,
+        )
         try:
             await interaction.edit_original_response(
                 content=text if len(text) <= 2000 else text[:1999] + "…"
@@ -1578,6 +1677,34 @@ class BookBot(discord.Client):
         except discord.HTTPException:
             # More than 15 minutes went by, so Discord no longer takes the answer.
             log.warning("Could not report on the retry: %s", text)
+
+    async def _retry_failure(
+        self, failure: Failure, dry_run: bool = False
+    ) -> tuple[discord.Message, tuple[discord.Message, list[Book]] | list[str] | Exception] | None:
+        """Answer a message the bot hit an error on, as if it had just been edited.
+
+        Returns the message and, for a real run, its reply and the books it shows, or the
+        error if it fails again; for a dry run, the queries it would look up. None if the
+        message can't be had any more.
+        """
+        async with self._one_at_a_time(failure.message_id):
+            answered = self.answered.get(failure.message_id)
+            message = await self._fetch_asked(failure, answered)
+            if message is None:
+                return None
+            queries = extract_queries(message.content)
+            if dry_run:
+                return message, queries
+            try:
+                await self._answer_edit(message, queries, force=True)
+            except Exception as error:
+                log.warning("Retrying %s failed again", message.jump_url, exc_info=error)
+                return message, error
+            await self._cleared(message)
+            answered = self.answered.get(message.id)
+            if answered is None:  # it asks for nothing now
+                return message, (message, [])
+            return message, (answered.message, [c.book for c in answered.cards if c.book])
 
     async def _retry_message(
         self, misses: list[Miss], results: dict[str, LookupResult], dry_run: bool = False
@@ -1698,7 +1825,7 @@ class BookBot(discord.Client):
             return shown, books
 
     async def _fetch_asked(
-        self, miss: Miss | Incomplete, answered: Answered | None
+        self, miss: Miss | Incomplete | Failure, answered: Answered | None
     ) -> discord.Message | None:
         """The message a missed query was in, or None if it can't be had any more."""
         try:

@@ -98,6 +98,9 @@ class FakeMessage:
     async def add_reaction(self, emoji):
         self.reactions.append(emoji)
 
+    async def remove_reaction(self, emoji, member):
+        self.reactions.remove(emoji)
+
     async def _history(self, after, limit):
         other = SimpleNamespace(author=SimpleNamespace(id=REQUESTER), reference=None)
         for later in [other, *(r for r in self.replies if not r.deleted)]:
@@ -145,6 +148,7 @@ def restart(bot):
     bot.answered.clear()
     bot.replies.clear()
     bot.lookups.clear()
+    bot._flagged.clear()
 
 
 def logged(bot):
