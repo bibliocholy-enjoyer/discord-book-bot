@@ -22,7 +22,7 @@ from .formatting import (
     fill_in_card,
     not_found_line,
 )
-from .hardcover import Book, HardcoverClient, HardcoverError
+from .hardcover import Book, HardcoverClient, HardcoverError, HardcoverUnavailable
 from .links import (
     Links,
     amazon_search_url,
@@ -76,6 +76,9 @@ RECENT_EDIT = datetime.timedelta(minutes=5)
 # A usage record made before threads were noted only has the thread's parent channel. To
 # find such a message again, this many of the channel's open threads are tried as well.
 OLD_THREADS_TRIED = 10
+# Seconds to wait before each new try at a message that failed because Hardcover was down
+# (see _retry_later). After the last, it is left for /retry-missed.
+AUTO_RETRY_DELAYS = (2 * 60, 10 * 60, 30 * 60)
 RETRIES_LISTED = 15  # how many updated replies /retry-missed names in its answer
 COVER_RETRY_DELAYS = (1.5, 3, 6)  # seconds to wait before each re-send of a coverless edit
 OWNER_DM_INTERVAL = 3600  # at most one DM per kind of error per hour
@@ -690,6 +693,8 @@ class BookBot(discord.Client):
         # Messages given the error reaction since the bot started. The usage log keeps
         # those in servers that have added the bot, through restarts (see _failed).
         self._flagged: set[int] = set()
+        # Messages that failed because Hardcover was down, waiting to be tried again.
+        self._retrying: set[int] = set()
         self.replies: dict[int, Reply] = {}  # by the ID of the bot's reply message
         self.answered: dict[int, Answered] = {}  # by the ID of the message replied to
         # For each message being handled right now: a lock, and how many are using it.
@@ -1140,7 +1145,48 @@ class BookBot(discord.Client):
                 await self.usage.failed(origin)
             except Exception as log_error:
                 log.exception("Could not note the failure in the usage log", exc_info=log_error)
+        if isinstance(error, HardcoverUnavailable) and message.id not in self._retrying:
+            self._retrying.add(message.id)
+            self.spawn(self._retry_later(message))
         await self.report_error(where, error)
+
+    async def _retry_later(self, message: discord.Message) -> None:
+        """Try a message again after Hardcover was down, a few times over the next while.
+
+        Stops once the message has its reply some other way, as after an edit or
+        /retry-missed, or once it is deleted. Each try reads the message again, so it
+        answers what the message asks for by then. Waiting tries are lost on a restart,
+        but the usage log still has the message for /retry-missed.
+        """
+        try:
+            for delay in AUTO_RETRY_DELAYS:
+                await asyncio.sleep(delay)
+                async with self._one_at_a_time(message.id):
+                    if message.id not in self._retrying:
+                        return  # answered in the meantime
+                    try:
+                        current = await message.channel.fetch_message(message.id)
+                    except (discord.NotFound, discord.Forbidden):
+                        return
+                    except discord.HTTPException:
+                        continue  # Discord is having trouble too; try again later
+                    queries = extract_queries(current.content)
+                    try:
+                        await self._answer_edit(current, queries, force=True)
+                    except HardcoverUnavailable as error:
+                        log.warning("Hardcover still down for %s: %s", message.jump_url, error)
+                        continue
+                    except Exception as error:
+                        await self.report_error(
+                            f"trying this message again: {message.jump_url}", error
+                        )
+                        return
+                    await self._cleared(current)
+                    log.info("Answered %s once Hardcover was back", message.jump_url)
+                    return
+            log.info("Gave up on %s; it is left for /retry-missed", message.jump_url)
+        finally:
+            self._retrying.discard(message.id)
 
     async def _cleared(self, message: discord.Message) -> None:
         """Take the error reaction off a message whose reply is now as it should be.
@@ -1150,6 +1196,7 @@ class BookBot(discord.Client):
         """
         flagged = message.id in self._flagged
         self._flagged.discard(message.id)
+        self._retrying.discard(message.id)  # its reply needs no more tries
         if self.usage and message.guild:
             try:
                 flagged = await self.usage.resolved(message.id) or flagged

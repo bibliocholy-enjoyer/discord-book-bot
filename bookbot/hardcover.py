@@ -59,6 +59,14 @@ class HardcoverError(Exception):
     """The Hardcover API could not be reached or returned an error."""
 
 
+class HardcoverUnavailable(HardcoverError):
+    """Hardcover, or just its search, is down or overloaded: worth trying again later.
+
+    Unlike other errors, such as a rejected token or a malformed query, which would fail
+    the same way every time.
+    """
+
+
 @dataclass(frozen=True)
 class Author:
     id: int
@@ -149,7 +157,9 @@ class HardcoverClient:
         )
         results = (data.get("search") or {}).get("results")
         if results is None:
-            raise HardcoverError(f"search returned no results object for {query!r}")
+            # What Hardcover sends while its search is down: the API itself answers, and
+            # the website says search is temporarily unavailable.
+            raise HardcoverUnavailable(f"search returned no results object for {query!r}")
         return [
             SearchHit(
                 book=book_from_search_document(hit["document"]),
@@ -211,12 +221,12 @@ class HardcoverClient:
             except _RateLimited as error:
                 rate_limit_waits += 1
                 if rate_limit_waits > MAX_RATE_LIMIT_WAITS:
-                    raise HardcoverError(str(error)) from error
+                    raise HardcoverUnavailable(str(error)) from error
                 await asyncio.sleep(RATE_LIMIT_WAIT_SECONDS)
             except _Retryable as error:
                 failures += 1
                 if failures > 1:
-                    raise HardcoverError(str(error)) from error
+                    raise HardcoverUnavailable(str(error)) from error
                 log.warning("Hardcover request failed (%s), retrying once", error)
                 await asyncio.sleep(1)
 

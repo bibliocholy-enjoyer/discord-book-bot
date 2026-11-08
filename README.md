@@ -170,9 +170,14 @@ uv run ruff check . && uv run ruff format --check .
 - A failed lookup gets a reaction on the message that asked, and nothing else in the channel.
   The reaction is ⚠️ unless the application has a custom emoji named `bookbot_error`
   (upload `assets/bookbot_error.png` under Emojis in the developer portal, for each application).
-  The reaction comes off once the message gets its reply: when it is edited and the lookup
-  works this time, or when `/retry-missed` answers it (in servers that have added the bot,
-  with the usage log; see [Filling in books that weren't found](#filling-in-books-that-werent-found)).
+- If the lookup failed because Hardcover was down (its search not answering, server errors,
+  timeouts, or being rate-limited for too long), the bot tries the message again on its
+  own: 2 minutes later, then 10 and 30 minutes after that, replying as soon as one works. Other errors, such as a
+  rejected Hardcover token, would fail the same way again and aren't retried. Tries still
+  waiting are lost if the bot restarts.
+- The reaction comes off once the message gets its reply: from one of those tries, when it
+  is edited and the lookup works this time, or when `/retry-missed` answers it (in servers
+  that have added the bot, with the usage log; see [Filling in books that weren't found](#filling-in-books-that-werent-found)).
 - The bot DMs its owner (the application owner, or `OWNER_ID`) with the error and a link to
   the message, at most once an hour per distinct error. You must share a server with the bot
   to receive DMs.

@@ -1,12 +1,13 @@
 """/retry-missed: replies that couldn't find a book get it once Hardcover has it."""
 
+import asyncio
 import sqlite3
 from types import SimpleNamespace
 
 import discord
 import pytest
 
-from bookbot.hardcover import Book, HardcoverError
+from bookbot.hardcover import Book, HardcoverError, HardcoverUnavailable
 from bookbot.links import Links, hardcover_book_url
 from bookbot.lookup import LookupResult
 from bookbot.usage import Origin, UsageLog
@@ -495,7 +496,8 @@ def outage(bot, monkeypatch):
         bot.reported.append(where)
 
     async def failing(client, query):
-        raise HardcoverError(f"search returned no results object for {query!r}")
+        bot.lookups.append(query)
+        raise HardcoverUnavailable(f"search returned no results object for {query!r}")
 
     bot.report_error = report_error
     monkeypatch.setattr(test_edits.botmod, "find_book", failing)
@@ -518,7 +520,7 @@ async def test_a_message_that_hit_an_error_is_answered_once_hardcover_is_back(
     told = await retry(bot, message)
     assert "1 message that hit an error" in told
     assert f"Still hitting an error (1):**\n- {message.jump_url}: `" in told
-    assert "HardcoverError: search returned no results object" in told
+    assert "HardcoverUnavailable: search returned no results object" in told
     assert message.reactions == [bot.error_reaction] and failures(bot) == [message.id]
 
     if restarted:
@@ -596,3 +598,83 @@ async def test_errors_from_before_the_hours_asked_for_are_not_retried(bot, outag
     bot.usage._db.execute("UPDATE failures SET failed_at = '2020-01-01T00:00:00+00:00'")
     outage()
     assert "Nothing to retry" in await retry(bot, message)
+
+
+# --- Trying again on its own, when Hardcover was down ---------------------------------------
+
+
+@pytest.fixture
+def quick_retries(monkeypatch):
+    """The automatic tries happen at once; returns a function that waits for them."""
+    monkeypatch.setattr(test_edits.botmod, "AUTO_RETRY_DELAYS", (0, 0, 0))
+
+    async def finished(bot):
+        await asyncio.gather(
+            *(t for t in bot._background_tasks if t.get_coro().__name__ == "_retry_later")
+        )
+
+    return finished
+
+
+async def test_a_message_is_answered_on_its_own_once_hardcover_is_back(bot, outage, quick_retries):
+    message = FakeMessage("{dune}")
+    await bot.on_message(message)
+    assert message.reactions == [bot.error_reaction] and bot._retrying == {message.id}
+    outage()
+    await quick_retries(bot)
+    assert message.replies[0].titles() == ["Dune"]
+    assert message.reactions == [] and failures(bot) == [] and bot._retrying == set()
+    assert bot.reported == [f"this message: {message.jump_url}"]  # nothing more for the owner
+
+
+async def test_after_the_last_try_the_message_is_left_for_retry_missed(bot, outage, quick_retries):
+    message = FakeMessage("{dune}")
+    await bot.on_message(message)
+    await quick_retries(bot)
+    assert bot.lookups == ["dune"] * 4  # the first time and three more
+    assert message.replies == [] and message.reactions == [bot.error_reaction]
+    assert failures(bot) == [message.id] and bot._retrying == set()
+
+
+async def test_an_error_that_would_happen_again_is_not_retried(bot, outage, quick_retries):
+    async def unauthorized(client, query):
+        raise HardcoverError("HTTP 401: invalid token")
+
+    test_edits.botmod.find_book, working = unauthorized, test_edits.botmod.find_book
+    try:
+        message = FakeMessage("{dune}")
+        await bot.on_message(message)
+    finally:
+        test_edits.botmod.find_book = working
+    assert bot._retrying == set() and message.reactions == [bot.error_reaction]
+
+
+async def test_a_try_answers_what_the_message_asks_for_by_then(bot, outage, quick_retries):
+    message = FakeMessage("{dune}")
+    await bot.on_message(message)
+    message.content = "{circe}"  # edited while Hardcover was still down
+    outage()
+    await quick_retries(bot)
+    assert message.replies[0].titles() == ["Circe"] and message.reactions == []
+    assert logged(bot) == [("circe", 3)]
+
+
+async def test_no_more_tries_once_an_edit_got_the_reply(bot, outage, monkeypatch):
+    monkeypatch.setattr(test_edits.botmod, "AUTO_RETRY_DELAYS", (0,))
+    message = FakeMessage("{dune}")
+    await bot.on_message(message)
+    outage()
+    await test_edits.edit(bot, message, "{circe}")
+    bot.lookups.clear()
+    await asyncio.gather(*bot._background_tasks)
+    assert bot.lookups == [] and len(message.replies) == 1
+    assert message.replies[0].edits == 0 and message.reactions == []
+
+
+async def test_no_more_tries_once_the_message_is_deleted(bot, outage, quick_retries):
+    message = FakeMessage("{dune}")
+    await bot.on_message(message)
+    message.deleted = True
+    outage()
+    await quick_retries(bot)
+    assert bot.lookups == ["dune"] and message.replies == [] and bot._retrying == set()
