@@ -47,6 +47,7 @@ What is known about a book
     book.authors          a list; each has .name ("Rebecca Yarros")
     book.series_name      "The Empyrean", or None if the book is not in a series
     book.series_position  2.0, or None
+    book.series_length    3, the number of main books in the series, or None
     book.genres           ["Fantasy", "Romance", ...], most relevant first; may be empty
     book.description      the blurb, often several paragraphs, or None
     book.rating           average rating on Hardcover out of 5, e.g. 4.34, or None
@@ -104,8 +105,8 @@ def book_embed(book: Book, links: Links, position: int = 0) -> discord.Embed:
     """The card for one book. Kept short so it doesn't fill a phone screen:
 
         **Iron Flame** by Rebecca Yarros
+        *The Empyrean #2 of 5*
         2023 · 640 pages · Fantasy, Romance
-        *The Empyrean #2*
         Hardcover · Goodreads · Amazon
 
     with the cover as a small picture on the right. ("Embed" is Discord's name for a card
@@ -135,11 +136,12 @@ def book_embed(book: Book, links: Links, position: int = 0) -> discord.Embed:
     if authors and len(f"{title_line} by {authors}") <= 256:
         title_line += f" by {authors}"
 
-    # Line 2: the year, page count and genres, whichever are known.
-    facts_line = " · ".join(piece for piece in [facts, genres] if piece)
-
-    # Line 3: the series, on its own since series names tend to be long.
+    # Line 2: the series, first under the title and on its own since series names tend
+    # to be long.
     series_line = series
+
+    # Line 3: the year, page count and genres, whichever are known.
+    facts_line = " · ".join(piece for piece in [facts, genres] if piece)
 
     # Line 4: where to find the book.
     links_line = (
@@ -152,8 +154,8 @@ def book_embed(book: Book, links: Links, position: int = 0) -> discord.Embed:
     #
     #     rating_line = f"★ {book.rating:.2f}" if book.rating else ""
     #
-    # and then: lines = [facts_line, series_line, links_line, rating_line]
-    lines = [facts_line, series_line, links_line]
+    # and then: lines = [series_line, facts_line, links_line, rating_line]
+    lines = [series_line, facts_line, links_line]
 
     # Join the lines, skipping any that came out empty so the card has no blank gaps.
     text = "\n".join(line for line in lines if line)
@@ -184,15 +186,19 @@ def fill_in_card(embed: discord.Embed, book: Book) -> None:
     facts = facts_text(book)
     if facts:
         lines = (embed.description or "").split("\n")
-        found = _FACTS_LINE.fullmatch(lines[0])
+        # The facts go just under the series, which is in italics, or first if there is
+        # none. (Cards sent before the series moved up have the facts first either way.)
+        i = 1 if lines[0].startswith("*") else 0
+        line = lines[i] if i < len(lines) else ""
+        found = _FACTS_LINE.fullmatch(line)
         if found:
             # Keep any genres that follow the old year and page count.
-            lines[0] = " · ".join(piece for piece in [facts, found["genres"]] if piece)
-        elif lines[0] and not lines[0].startswith(("*", "[")):
-            # A line of genres alone (not the series, which is in italics, or the links).
-            lines[0] = f"{facts} · {lines[0]}"
+            lines[i] = " · ".join(piece for piece in [facts, found["genres"]] if piece)
+        elif line and not line.startswith(("*", "[")):
+            # A line of genres alone (not the series or the links).
+            lines[i] = f"{facts} · {line}"
         else:
-            lines.insert(0, facts)
+            lines.insert(i, facts)
         embed.description = "\n".join(line for line in lines if line)
 
 
@@ -216,12 +222,18 @@ def authors_text(book: Book) -> str:
 
 
 def series_text(book: Book) -> str:
-    """The series and the book's place in it, in italics: "*The Empyrean #2*"."""
+    """The series and the book's place in it, in italics: "*The Empyrean #2 of 5*".
+
+    "of 5" is left off when the series' length is unknown, or is less than the book's
+    place in it (Hardcover's count can lag behind a newly added book).
+    """
     if not book.series_name:
         return ""
     series = escape(book.series_name)
     if book.series_position is not None:
         series += f" #{format_position(book.series_position)}"
+        if book.series_length and book.series_length >= book.series_position:
+            series += f" of {book.series_length}"
     return f"*{series}*"
 
 

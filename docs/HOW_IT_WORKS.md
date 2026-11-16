@@ -108,8 +108,8 @@ Everlasting*. `bookbot/lookup.py` holds the rules the bot uses to choose, and th
 ### 5. The bot builds the reply
 
 With a book chosen, the bot builds the three links (Hardcover, Goodreads, Amazon) and
-lays out the card: title and author, then year and page count, then series and genres,
-then the links, with the cover alongside. The title links to the book on Hardcover,
+lays out the card: title and author, then the series ("#1 of 3"), then year, page count
+and genres, then the links, with the cover alongside. The title links to the book on Hardcover,
 unless Hardcover is missing its cover or blurb; then it goes to Goodreads or Amazon (a
 Goodreads search, if the bot doesn't know the book's page on either).
 

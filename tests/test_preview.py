@@ -29,7 +29,7 @@ def test_page_shows_each_kind_of_reply():
         in page
     )
     assert "<div>1965 · 528 pages · Science Fiction, Classics</div>" in page
-    assert "<div><em>Dune #1</em></div>" in page
+    assert "<div><em>Dune #1 of 6</em></div>" in page
     assert "Couldn't find <strong>Some Book Nobody Has Heard Of</strong>" in page
     assert "Dune — Frank Herbert (1965)" in page
     assert "border-left: 4px solid #e5484d" in page
