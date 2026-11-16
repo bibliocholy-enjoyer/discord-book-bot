@@ -29,6 +29,7 @@ SAMPLE_BOOK = Book(
     authors=[Author(id=171873, name="Frank Herbert")],
     series_name="Dune",
     series_position=1.0,
+    series_length=6,
     description="The blurb would go here. It is usually a few paragraphs long.",
     rating=4.33,
     ratings_count=6065,

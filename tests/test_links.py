@@ -55,7 +55,7 @@ def test_book_from_search_document():
             {"author": {"id": 1, "name": "Frank Herbert"}, "contribution": "Author"},
             {"author": {"id": 2, "name": "Some Narrator"}, "contribution": "Narrator"},
         ],
-        "featured_series": {"position": 1.0, "series": {"name": "Dune"}},
+        "featured_series": {"position": 1.0, "series": {"name": "Dune", "primary_books_count": 6}},
         "image": {"url": "https://example.com/dune.jpg", "color": "#b7d7c1"},
         "rating": 4.3,
         "ratings_count": 5000,
@@ -67,7 +67,7 @@ def test_book_from_search_document():
     book = book_from_search_document(doc)
     assert book.id == 312460
     assert book.author_names == ["Frank Herbert"]
-    assert (book.series_name, book.series_position) == ("Dune", 1.0)
+    assert (book.series_name, book.series_position, book.series_length) == ("Dune", 1.0, 6)
     assert book.cover_url == "https://example.com/dune.jpg"
 
     sparse = book_from_search_document({"id": "5", "title": "Sparse", "featured_series": {}})

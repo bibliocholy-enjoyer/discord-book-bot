@@ -72,6 +72,8 @@ class Book:
     authors: list[Author] = field(default_factory=list)
     series_name: str | None = None
     series_position: float | None = None
+    # How many main books the series has (not counting novellas and other extras), or None.
+    series_length: int | None = None
     description: str | None = None
     rating: float | None = None
     ratings_count: int = 0
@@ -123,6 +125,7 @@ def book_from_search_document(doc: dict) -> Book:
         ],
         series_name=(series.get("series") or {}).get("name"),
         series_position=series.get("position"),
+        series_length=(series.get("series") or {}).get("primary_books_count") or None,
         description=doc.get("description"),
         rating=doc.get("rating"),
         ratings_count=doc.get("ratings_count") or 0,

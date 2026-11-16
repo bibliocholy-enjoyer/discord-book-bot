@@ -38,6 +38,7 @@ def test_full_embed():
         authors=[Author(id=9, name="Rebecca Yarros")],
         series_name="The Empyrean",
         series_position=2.0,
+        series_length=5,
         description="word " * 200,
         rating=4.3414,
         ratings_count=1227,
@@ -50,8 +51,8 @@ def test_full_embed():
     assert embed.title == "**Iron Flame** by Rebecca Yarros"
     assert embed.url == LINKS.hardcover
     assert embed.description.split("\n") == [
+        "*The Empyrean #2 of 5*",
         "2023 · 640 pages · Fantasy, Romance",
-        "*The Empyrean #2*",
         f"[Hardcover]({LINKS.hardcover}) · [Goodreads]({LINKS.goodreads})"
         f" · [Amazon]({LINKS.amazon})",
     ]
@@ -122,6 +123,27 @@ def test_not_found_line_escapes_markdown_and_links_searches():
     assert "[Search for it on Goodreads](" in line and "or [Amazon](" in line
 
 
+@pytest.mark.parametrize(
+    ("position", "length", "expected"),
+    [
+        (1.0, 3, "*The Kiss Quotient #1 of 3*"),
+        (1.5, 3, "*The Kiss Quotient #1.5 of 3*"),
+        (1.0, None, "*The Kiss Quotient #1*"),
+        (4.0, 3, "*The Kiss Quotient #4*"),
+        (None, 3, "*The Kiss Quotient*"),
+    ],
+)
+def test_series_line_shows_the_series_length(position, length, expected):
+    book = Book(
+        id=7,
+        title="The Kiss Quotient",
+        series_name="The Kiss Quotient",
+        series_position=position,
+        series_length=length,
+    )
+    assert book_embed(book, LINKS).description.split("\n")[0] == expected
+
+
 def test_alternative_label():
     book = Book(id=1, title="Dune", authors=[Author(id=1, name="Frank Herbert")], release_year=1965)
     assert alternative_label(book) == "Dune — Frank Herbert (1965)"
@@ -144,7 +166,13 @@ def test_alternative_label():
         ("2020 · Fantasy, Romance", "1965 · 412 pages · Fantasy, Romance"),
         ("Fantasy\n[Hardcover](h)", "1965 · 412 pages · Fantasy\n[Hardcover](h)"),
         ("2020 · 300 pages\nFantasy\n[Hardcover](h)", "1965 · 412 pages\nFantasy\n[Hardcover](h)"),
-        ("*Dune #1* · Fantasy", "1965 · 412 pages\n*Dune #1* · Fantasy"),
+        ("*Dune #1* · Fantasy", "*Dune #1* · Fantasy\n1965 · 412 pages"),
+        ("*Dune #1 of 6*\n[Hardcover](h)", "*Dune #1 of 6*\n1965 · 412 pages\n[Hardcover](h)"),
+        ("*Dune #1 of 6*\n2020 · Fantasy", "*Dune #1 of 6*\n1965 · 412 pages · Fantasy"),
+        (
+            "*Dune #1 of 6*\nFantasy\n[Hardcover](h)",
+            "*Dune #1 of 6*\n1965 · 412 pages · Fantasy\n[Hardcover](h)",
+        ),
     ],
 )
 def test_filling_in_a_card_puts_in_or_replaces_the_year_and_pages(before, after):
