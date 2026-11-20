@@ -748,3 +748,34 @@ async def test_a_broken_log_costs_only_the_tip(bot):
     [reply] = place.replies
     assert reply.titles() == ["Dune"] and not tipped(reply)
     assert reported == ["checking whether to show the {…} tip"]
+
+
+def read_only(message, **allowed):
+    """Put the message in a channel where the bot lacks some permissions, like #rules."""
+    permissions = {"send_messages": False, "read_message_history": True, **allowed}
+    message.guild.me = SimpleNamespace(id=BOT)
+    message.channel.permissions_for = lambda member: SimpleNamespace(
+        send_messages_in_threads=permissions["send_messages"], **permissions
+    )
+
+
+async def test_a_channel_the_bot_cant_post_in_is_left_alone(bot):
+    message = FakeMessage("Be kind. {which is the server safeword}")
+    read_only(message)
+    await bot.on_message(message)
+    await edit(bot, message, "Be kind. {Tweens-and-Teens}")
+    assert bot.lookups == [] and message.replies == [] and message.reactions == []
+
+
+async def test_a_channel_without_read_message_history_is_left_alone(bot):
+    message = FakeMessage("{dune}")
+    read_only(message, send_messages=True, read_message_history=False)
+    await bot.on_message(message)
+    assert bot.lookups == [] and message.replies == []
+
+
+async def test_a_channel_the_bot_can_post_in_still_gets_replies(bot):
+    message = FakeMessage("{dune}")
+    read_only(message, send_messages=True)
+    await bot.on_message(message)
+    assert bot.lookups == ["dune"] and len(message.replies) == 1
