@@ -462,6 +462,24 @@ def place_text(guild: discord.Guild | None, channel) -> str:
     return f"{shown} in **{discord.utils.escape_markdown(guild.name)}**"
 
 
+def _can_reply(message: discord.Message) -> bool:
+    """Whether the bot is allowed to reply to a message where it was posted.
+
+    A server's read-only channels, like #rules, often have text in {curly braces} that
+    isn't asking for a book. Looking it up there would only end in a 403 from Discord.
+    """
+    guild = message.guild
+    me = getattr(guild, "me", None)
+    permissions_for = getattr(message.channel, "permissions_for", None)
+    if guild is None or me is None or permissions_for is None:
+        return True  # a DM, or nothing to go on: try, and let any error be reported
+    allowed = permissions_for(me)
+    in_thread = isinstance(message.channel, discord.Thread)
+    can_send = allowed.send_messages_in_threads if in_thread else allowed.send_messages
+    # A reply refers back to the message it answers, which takes Read Message History.
+    return can_send and allowed.read_message_history
+
+
 def _just_edited(message: discord.Message) -> bool:
     """Whether the message's text changed moments ago, going by Discord's own record."""
     edited_at = message.edited_at
@@ -1071,7 +1089,7 @@ class BookBot(discord.Client):
     async def on_message(self, message: discord.Message) -> None:
         # Everything that can fail sits behind these checks, so ordinary chat messages
         # can never produce an error reply or reaction.
-        if message.author.bot:
+        if message.author.bot or not _can_reply(message):
             return
         queries = extract_queries(message.content)
         if not queries:
@@ -1088,7 +1106,7 @@ class BookBot(discord.Client):
         # checked too because a message can be edited while its first reply is still
         # being put together, before there is anything in `answered`.
         message = payload.message
-        if message.author.bot:
+        if message.author.bot or not _can_reply(message):
             return
         queries = extract_queries(message.content)
         if not queries and message.id not in self.answered and message.id not in self._locks:
